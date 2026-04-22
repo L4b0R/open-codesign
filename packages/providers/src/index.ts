@@ -223,6 +223,7 @@ export async function complete(
         maxTokens?: number;
         reasoning?: ReasoningLevel;
         headers?: Record<string, string>;
+        onPayload?: (payload: unknown) => unknown;
       },
     ) => Promise<PiAssistantMessage>;
   };
@@ -241,6 +242,8 @@ export async function complete(
     }
   }
 
+  const piContext = toPiContext(messages, piModel);
+
   const piOpts: {
     apiKey: string;
     baseUrl?: string;
@@ -248,6 +251,7 @@ export async function complete(
     maxTokens?: number;
     reasoning?: ReasoningLevel;
     headers?: Record<string, string>;
+    onPayload?: (payload: unknown) => unknown;
   } = {
     apiKey,
   };
@@ -256,6 +260,28 @@ export async function complete(
   if (opts.maxTokens !== undefined) piOpts.maxTokens = opts.maxTokens;
   if (opts.reasoning !== undefined) piOpts.reasoning = opts.reasoning;
   if (opts.httpHeaders !== undefined) piOpts.headers = { ...opts.httpHeaders };
+
+  // Strict OpenAI-Responses gateways (e.g. sub2api-style routers) 400 when
+  // they see BOTH a system/developer item in `input[]` AND no top-level
+  // `instructions`. pi-ai's plain `openai-responses` wire injects the former
+  // but not the latter, so we mirror the codex wire's strict behavior here:
+  // set `instructions` and strip system/developer entries from `input[]`.
+  if (piModel.api === 'openai-responses' && piContext.systemPrompt) {
+    const systemPrompt = piContext.systemPrompt;
+    piOpts.onPayload = (payload) => {
+      const params = payload as {
+        instructions?: string;
+        input?: Array<{ role?: string }>;
+      };
+      params.instructions = systemPrompt;
+      if (Array.isArray(params.input)) {
+        params.input = params.input.filter(
+          (entry) => entry.role !== 'system' && entry.role !== 'developer',
+        );
+      }
+      return params;
+    };
+  }
 
   // sub2api / claude2api gateways 403 requests without claude-cli identity
   // headers. pi-ai only injects those on OAuth tokens — paste a
@@ -269,7 +295,7 @@ export async function complete(
     piOpts.headers = { ...claudeCodeIdentityHeaders(), ...(piOpts.headers ?? {}) };
   }
 
-  const result = await pi.completeSimple(piModel, toPiContext(messages, piModel), piOpts);
+  const result = await pi.completeSimple(piModel, piContext, piOpts);
 
   if (result.stopReason === 'error') {
     throw new CodesignError(

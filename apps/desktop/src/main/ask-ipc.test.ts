@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AskInput } from '@open-codesign/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createWebResearchAuthorization } from './web-research';
 
 const { handlers, windows, userData } = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, raw?: unknown) => unknown>(),
@@ -299,5 +300,83 @@ describe('durable ask IPC', () => {
     await cancelPendingAskRequests('closed');
     await expect(waiting).resolves.toEqual({ status: 'cancelled', answers: [] });
     expect(await listPendingAskRequests()).toEqual([]);
+  });
+});
+
+describe('web research consent through the live ask IPC bridge', () => {
+  it.each([
+    'Allow this run',
+    'Deny',
+  ])('requires explicit %s and reuses the decision only within the run', async (choice) => {
+    registerAskIpc();
+    const send = vi.fn();
+    const window = makeWindow(send);
+    const network = vi.fn(async () => []);
+    const authorize = createWebResearchAuthorization(
+      { enabled: true, maxCalls: 7 },
+      (input, signal) =>
+        requestAsk('web-research-run', input, () => window, {
+          designId: 'research-design',
+          ...(signal ? { signal } : {}),
+        }),
+    );
+    const first = authorize().then(network);
+    expect(network).not.toHaveBeenCalled();
+    const payload = await firstPending();
+    expect(send.mock.calls[0]?.[0]).toBe('ask:request');
+    expect(payload).toMatchObject({
+      sessionId: 'web-research-run',
+      runId: 'web-research-run',
+      designId: 'research-design',
+    });
+    expect(payload.input.questions[0]).toMatchObject({
+      id: 'web-research-permission',
+      prompt: expect.stringContaining('7'),
+      options: ['Allow this run', 'Deny'],
+    });
+    const resolve = handlers.get('ask:resolve');
+    if (!resolve) throw new Error('ask:resolve handler missing');
+    await resolve(null, {
+      requestId: payload.requestId,
+      status: 'answered',
+      answers: [{ questionId: 'web-research-permission', value: choice }],
+    });
+    if (choice === 'Allow this run') {
+      await expect(first).resolves.toEqual([]);
+      await authorize().then(network);
+      expect(network).toHaveBeenCalledTimes(2);
+    } else {
+      await expect(first).rejects.toThrow(/permission denied/);
+      await expect(authorize()).rejects.toThrow(/permission denied/);
+      expect(network).not.toHaveBeenCalled();
+    }
+    expect(send.mock.calls.filter(([channel]) => channel === 'ask:request')).toHaveLength(1);
+    expect(await listPendingAskRequests()).toEqual([]);
+  });
+
+  it('cancels a pending consent request without ever making a network call', async () => {
+    const send = vi.fn();
+    const window = makeWindow(send);
+    const controller = new AbortController();
+    const network = vi.fn();
+    const authorize = createWebResearchAuthorization(
+      { enabled: true, maxCalls: 7 },
+      (input, signal) => requestAsk('web-research-abort', input, () => window, signal),
+    );
+    const pending = authorize(controller.signal).then(network);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(network).not.toHaveBeenCalled();
+    expect(await listPendingAskRequests()).toEqual([]);
+    expect(send).toHaveBeenCalledWith(
+      'ask:cancelled',
+      expect.objectContaining({ sessionId: 'web-research-abort' }),
+    );
+  });
+
+  it('does not ask for consent when the feature is disabled; the service reports the configuration error', async () => {
+    const request = vi.fn();
+    await createWebResearchAuthorization({ enabled: false, maxCalls: 7 }, request)();
+    expect(request).not.toHaveBeenCalled();
   });
 });

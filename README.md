@@ -319,6 +319,8 @@ Contract tests check loaded instructions, supported source examples, preference 
 - **Light + dark themes**, **EN + 简体中文 UI** with live toggle
 
 ### Export and packaging
+
+- **Opt-in web research for slides** — Tavily search, public-page reading, saved evidence and separate Markdown sources alongside exports. See [Web Search configuration and usage](WEB_SEARCH.md).
 - **Five export formats** — HTML (inlined local assets), PDF (local Chrome), PPTX, ZIP, Markdown. Literal local image and CSS URL references in JSX/TSX are resolved before runtime encoding; ZIP also preserves the original editable source. Dynamically computed asset paths are not statically collected.
 - **GitHub Release pipeline** — unsigned DMG (macOS), EXE (Windows), AppImage (Linux). Code-signing lands in v0.5 along with opt-in auto-update
 

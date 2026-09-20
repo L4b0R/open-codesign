@@ -89,6 +89,7 @@ export async function runSetProviderAndModels(
     activeModel: nextActiveModel,
     secrets: nextSecrets,
     providers: nextProviders,
+    ...(cachedConfig?.webSearch !== undefined ? { webSearch: cachedConfig.webSearch } : {}),
     ...(cachedConfig?.designSystem !== undefined
       ? { designSystem: cachedConfig.designSystem }
       : {}),
@@ -138,8 +139,9 @@ export async function runDeleteProvider(raw: unknown): Promise<ProviderRow[]> {
       version: 3,
       activeProvider: '',
       activeModel: '',
-      secrets: {},
+      secrets: nextSecrets,
       providers: nextProviders,
+      ...(cfg.webSearch !== undefined ? { webSearch: cfg.webSearch } : {}),
       ...(cfg.designSystem !== undefined ? { designSystem: cfg.designSystem } : {}),
     });
     await writeConfig(emptyNext);
@@ -153,6 +155,7 @@ export async function runDeleteProvider(raw: unknown): Promise<ProviderRow[]> {
     activeModel: modelPrimary,
     secrets: nextSecrets,
     providers: nextProviders,
+    ...(cfg.webSearch !== undefined ? { webSearch: cfg.webSearch } : {}),
     ...(cfg.designSystem !== undefined ? { designSystem: cfg.designSystem } : {}),
   });
   await writeConfig(next);
@@ -194,6 +197,7 @@ export async function runSetActiveProvider(raw: unknown): Promise<OnboardingStat
     activeModel,
     secrets: cfg.secrets,
     providers: cfg.providers,
+    ...(cfg.webSearch !== undefined ? { webSearch: cfg.webSearch } : {}),
     ...(cfg.designSystem !== undefined ? { designSystem: cfg.designSystem } : {}),
   });
   await writeConfig(next);
@@ -243,6 +247,7 @@ export async function runAddCustomProvider(
       : (cachedConfig?.activeModel ?? input.defaultModel),
     secrets: nextSecrets,
     providers: nextProviders,
+    ...(cachedConfig?.webSearch !== undefined ? { webSearch: cachedConfig.webSearch } : {}),
     ...(cachedConfig?.designSystem !== undefined
       ? { designSystem: cachedConfig.designSystem }
       : {}),
@@ -344,6 +349,7 @@ export async function runUpdateProvider(input: UpdateProviderInput): Promise<Onb
     activeModel: cfg.activeModel,
     secrets: nextSecrets,
     providers: { ...cfg.providers, [input.id]: updated },
+    ...(cfg.webSearch !== undefined ? { webSearch: cfg.webSearch } : {}),
     ...(cfg.designSystem !== undefined ? { designSystem: cfg.designSystem } : {}),
   });
   await writeConfig(next);

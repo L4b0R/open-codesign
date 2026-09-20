@@ -153,6 +153,7 @@ export async function setDesignSystem(
     activeModel: cfg.activeModel,
     secrets: cfg.secrets,
     providers: cfg.providers,
+    ...(cfg.webSearch !== undefined ? { webSearch: cfg.webSearch } : {}),
     ...(designSystem !== null ? { designSystem: StoredDesignSystem.parse(designSystem) } : {}),
   });
   await writeConfig(next);

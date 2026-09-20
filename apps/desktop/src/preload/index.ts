@@ -176,6 +176,8 @@ export interface RenameDesignOptions {
 }
 
 export interface ExportInvokeResponse {
+  sourcesPath?: string;
+  researchWarnings?: string[];
   status: 'saved' | 'cancelled';
   path?: string;
   bytes?: number;

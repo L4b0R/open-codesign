@@ -646,3 +646,5 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string> 
     throw remapProviderError(err, input.model.provider, input.wire);
   }
 }
+
+export { makeWebResearchTools, WEB_RESEARCH_GUIDANCE } from './tools/web-research.js';

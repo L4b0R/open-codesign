@@ -1194,7 +1194,15 @@ export function makeGenerationSlice(set: SetState, get: GetState): GenerationSli
           sourcePath: resolved.path,
         });
         if (res.status === 'saved' && res.path) {
-          set({ toastMessage: tr('notifications.exportedTo', { path: res.path }) });
+          set({
+            toastMessage: [
+              tr('notifications.exportedTo', { path: res.path }),
+              ...(res.sourcesPath
+                ? [tr('notifications.exportedTo', { path: res.sourcesPath })]
+                : []),
+              ...(res.researchWarnings ?? []),
+            ].join('\n'),
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : tr('errors.unknown');

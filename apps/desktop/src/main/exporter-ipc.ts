@@ -1,6 +1,12 @@
-import { mkdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { type ExporterFormat, type ExportOptions, exportArtifact } from '@open-codesign/exporters';
+import {
+  type ExporterFormat,
+  type ExportOptions,
+  exportArtifact,
+  readResearchSlides,
+} from '@open-codesign/exporters';
 import {
   classifyRenderableSource,
   findArtifactSourceReference,
@@ -15,6 +21,7 @@ import {
 import type { BrowserWindow } from 'electron';
 import { app, dialog, ipcMain } from './electron-runtime';
 import { type Database, getDesign } from './snapshots-db';
+import { buildSourcesMarkdown, loadResearchStore, writeUniqueSources } from './web-research-store';
 import { readWorkspaceFileAt } from './workspace-reader';
 
 const FORMAT_FILTERS: Record<ExporterFormat, Electron.FileFilter[]> = {
@@ -67,6 +74,8 @@ export interface ExportRequest {
 
 export interface ExportResponse {
   status: 'saved' | 'cancelled';
+  sourcesPath?: string;
+  researchWarnings?: string[];
   path?: string;
   bytes?: number;
 }
@@ -248,13 +257,30 @@ export function registerExporterIpc(
     // Export formats load their heavy deps lazily inside
     // exportArtifact. Errors propagate to the renderer as toasts (PRINCIPLES §10).
     const destinationPath = ensureExportExtension(picked.filePath, req.format);
-    const result = await exportArtifact(
-      req.format,
-      resolved.artifactSource,
-      destinationPath,
-      exportAssetOptions(resolved),
-    );
-    return { status: 'saved', path: result.path, bytes: result.bytes };
+    const companion = await prepareResearchExport(resolved);
+    const assets =
+      companion && req.format === 'zip'
+        ? [{ path: `sources-${randomUUID().slice(0, 8)}.md`, content: companion.markdown }]
+        : undefined;
+    const result = await exportArtifact(req.format, resolved.artifactSource, destinationPath, {
+      ...exportAssetOptions(resolved),
+      ...(assets ? { assets } : {}),
+    });
+    const sourcesPath =
+      companion && req.format !== 'zip'
+        ? await writeUniqueSources(
+            path.dirname(result.path),
+            `${path.parse(result.path).name}.sources`,
+            companion.markdown,
+          )
+        : undefined;
+    return {
+      status: 'saved',
+      path: result.path,
+      bytes: result.bytes,
+      ...(sourcesPath ? { sourcesPath } : {}),
+      ...(companion ? { researchWarnings: companion.warnings } : {}),
+    };
   });
 }
 
@@ -298,4 +324,25 @@ function formatTimestamp(date: Date): string {
   return `${day}-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(
     date.getUTCSeconds(),
   )}`;
+}
+
+export async function prepareResearchExport(
+  req: ResolvedExportSource,
+): Promise<{ markdown: string; warnings: string[] } | null> {
+  if (!req.workspacePath) return null;
+  try {
+    await lstat(path.join(req.workspacePath, '.codesign', 'research.json'));
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
+      return null;
+    throw error;
+  }
+  const store = await loadResearchStore(req.workspacePath);
+  if (
+    !store.usages.some((u) => u.path === req.sourcePath) &&
+    !req.artifactSource.includes('data-slide-id')
+  )
+    return null;
+  const slides = await readResearchSlides(req.artifactSource, exportAssetOptions(req));
+  return buildSourcesMarkdown(store, req.sourcePath, slides);
 }

@@ -47,6 +47,7 @@ import {
 import { resolveGenerationWorkspaceRoot } from '../generation-workspace';
 import { resolveImageGenerationConfig, toGenerateImageOptions } from '../image-generation-settings';
 import { makeJudgeVisualParity } from '../judge-visual-parity';
+import { decryptSecret } from '../keychain';
 import { getLogger } from '../logger';
 import {
   loadMemoryContext,
@@ -56,6 +57,7 @@ import {
   workspaceNameFromPath,
 } from '../memory-ipc';
 import { getApiKeyForProvider, getCachedConfig, hasApiKeyForProvider } from '../onboarding-ipc';
+
 import { readPersisted as readPreferences } from '../preferences-ipc';
 import { runPreview } from '../preview-runtime';
 import { preparePromptContext } from '../prompt-context';
@@ -85,6 +87,8 @@ import {
   recordDiagnosticEvent,
 } from '../snapshots-db';
 import { withTlsBypass } from '../tls-override';
+import { createResearchHost, createWebResearchAuthorization } from '../web-research';
+import { createWebResearchNetwork } from '../web-research-network';
 import { withStableWorkspacePath } from '../workspace-path-lock';
 import { listWorkspaceFilesAt, readWorkspaceFilesAt } from '../workspace-reader';
 import { finalAssistantTextForTurn } from './assistant-text';
@@ -716,6 +720,39 @@ export function registerGenerateIpc({ db, getMainWindow }: RegisterGenerateIpcDe
       designSkills,
     });
     const cfg = getCachedConfig();
+    const researchSettings = cfg?.webSearch ?? {
+      enabled: false,
+      maxCalls: 12,
+      timeoutMs: 15000,
+      maxChars: 10000,
+    };
+    // Keep credentials in this process and resolve only when a network tool is used.
+    let network: ReturnType<typeof createWebResearchNetwork> | undefined;
+    const getResearchNetwork = () => {
+      if (!network) {
+        const stored = cfg?.secrets['tavily'];
+        network = createWebResearchNetwork({
+          ...researchSettings,
+          ...(stored && researchSettings.enabled
+            ? { apiKey: decryptSecret(stored.ciphertext) }
+            : {}),
+        });
+      }
+      return network;
+    };
+    const research = createResearchHost({
+      network: {
+        search: (query, count, signal) => getResearchNetwork().search(query, count, signal),
+        fetch: (url, signal) => getResearchNetwork().fetch(url, signal),
+      },
+      inWorkspace: (fn) => withStableWorkspacePath(designId, () => fn(currentWorkspaceRoot())),
+      authorize: createWebResearchAuthorization(researchSettings, (questions, signal) =>
+        requestAsk(id, questions, () => getMainWindow(), {
+          designId,
+          ...(signal ? { signal } : {}),
+        }),
+      ),
+    });
     const imageConfig = cfg ? await resolveImageGenerationConfig(cfg) : null;
     const imageLog = getLogger('image-generation');
     const generateImageAsset = imageConfig
@@ -845,6 +882,7 @@ export function registerGenerateIpc({ db, getMainWindow }: RegisterGenerateIpcDe
       },
       {
         fs,
+        research,
         activeMessages,
         runtimeVerify: (source, context) =>
           withStableWorkspacePath(designId, () =>

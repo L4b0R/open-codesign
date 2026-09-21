@@ -1,26 +1,22 @@
-const RUNTIME_TOKENS = 'window.__codesign_tweaks__.tokens';
+const EDITMODE_BEGIN_RE = /\/\*\s*EDITMODE-BEGIN\s*\*\//g;
+const EDITMODE_END_RE = /\/\*\s*EDITMODE-END\s*\*\//g;
 
 export function bindEditmodeTokensToRuntime(source: string): string {
-  const parts: string[] = [];
+  const chunks: string[] = [];
   let cursor = 0;
-  let copiedUntil = 0;
-  let begin: number | null = null;
-  // An unmatched BEGIN must not restart a search across the entire suffix for
-  // every subsequent BEGIN. Each comment is visited once, including bad input.
   while (cursor < source.length) {
-    const open = source.indexOf('/*', cursor);
-    if (open < 0) break;
-    const close = source.indexOf('*/', open + 2);
-    if (close < 0) break;
-    const marker = source.slice(open + 2, close).trim();
-    if (marker === 'EDITMODE-BEGIN' && begin === null) begin = open;
-    if (marker === 'EDITMODE-END' && begin !== null) {
-      parts.push(source.slice(copiedUntil, begin), RUNTIME_TOKENS);
-      copiedUntil = close + 2;
-      begin = null;
-    }
-    cursor = close + 2;
+    EDITMODE_BEGIN_RE.lastIndex = cursor;
+    const begin = EDITMODE_BEGIN_RE.exec(source);
+    if (!begin) break;
+    EDITMODE_END_RE.lastIndex = EDITMODE_BEGIN_RE.lastIndex;
+    const end = EDITMODE_END_RE.exec(source);
+    // An unmatched first BEGIN means no later BEGIN can have a matching END.
+    // Do not rescan its suffix for every nested BEGIN (quadratic on malformed input).
+    if (!end) break;
+    chunks.push(source.slice(cursor, begin.index), 'window.__codesign_tweaks__.tokens');
+    cursor = EDITMODE_END_RE.lastIndex;
   }
-  parts.push(source.slice(copiedUntil));
-  return parts.join('');
+  if (chunks.length === 0) return source;
+  chunks.push(source.slice(cursor));
+  return chunks.join('');
 }

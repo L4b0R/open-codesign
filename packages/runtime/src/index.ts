@@ -27,6 +27,7 @@ import IOS_FRAME_JSX from '../vendor/ios-frame.jsx?raw';
 import REACT_UMD from '../vendor/react.umd.js?raw';
 import REACT_DOM_UMD from '../vendor/react-dom.umd.js?raw';
 
+import { bindEditmodeTokensToRuntime } from './editmode-runtime';
 import { OVERLAY_SCRIPT } from './overlay';
 import { TWEAKS_BRIDGE_LISTENER, TWEAKS_BRIDGE_SETUP } from './tweaks-bridge';
 
@@ -41,7 +42,6 @@ const JSX_TEMPLATE_END = '<!-- AGENT_BODY_END -->';
 const OVERLAY_MARKER = '<!-- CODESIGN_OVERLAY_SCRIPT -->';
 const JSX_RUNTIME_MARKER = '<!-- CODESIGN_JSX_RUNTIME -->';
 const STANDALONE_RUNTIME_MARKER = '<!-- CODESIGN_STANDALONE_RUNTIME -->';
-const EDITMODE_MARKER_RE = /\/\*\s*EDITMODE-BEGIN\s*\*\/[\s\S]*?\/\*\s*EDITMODE-END\s*\*\//g;
 export type RenderableSourceKind = 'html' | 'jsx' | 'tsx' | 'unknown';
 
 export interface BuildPreviewDocumentOptions {
@@ -294,10 +294,6 @@ function transformOptionsForKind(kind: 'jsx' | 'tsx'): { presets: unknown[]; fil
     };
   }
   return { filename: 'artifact.jsx', presets: ['react'] };
-}
-
-function bindEditmodeTokensToRuntime(source: string): string {
-  return source.replace(EDITMODE_MARKER_RE, 'window.__codesign_tweaks__.tokens');
 }
 
 function compileAndRunScript(

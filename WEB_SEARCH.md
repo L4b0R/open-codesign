@@ -1,6 +1,6 @@
 # Web Search v1
 
-Open CoDesign can research a slide topic, save facts/data, build slides, and deliver a separate sources file. It uses **Tavily Search** and a bounded, direct HTTP(S) reader. There is no research panel, MCP runtime, hosted account, or additional runtime dependency.
+Open CoDesign can research a slide topic, save facts/data, build slides, and deliver a separate sources file. It uses **Tavily Search** and a bounded, direct HTTP(S) reader. There is no research panel, MCP runtime, or hosted account. HTML reading uses the lazily loaded `parse5` HTML5 parser; it does not execute webpage scripts or load their resources.
 
 ## Configure
 
@@ -72,8 +72,18 @@ Evidence is attached to a rendered semantic fingerprint (text, accessible data l
 - Research slides require inspectable text/SVG charts, not canvas/iframe/video. Nested sections should not be used as layout containers. Every rendered section is treated as a page.
 - Fingerprints are deliberately conservative: changing SVG geometry or an image URL can require relinking even if intended as a visual edit. Arbitrary CSS-generated content, external image contents changing at the same URL, or opaque visual-only data cannot be semantically verified. Expose chart values as text or accessible attributes.
 - Uses an existing system Chrome/Chromium/Edge for rendered slide snapshots, like current exports. It does not bundle or download a browser.
-- Source metadata remains null if unavailable. HTML extraction is bounded text cleaning, not a full article reader. Exact quotes are checked against saved text, but the model still bears responsibility for interpretation, calculations and scope.
+- Source metadata remains null if unavailable. HTML extraction traverses parsed text nodes, omits non-content subtrees, and is not a full article reader. Returned text remains untrusted data (including literal angle brackets from encoded references), not sanitized HTML suitable for insertion. Exact quotes are checked against saved text, but the model still bears responsibility for interpretation, calculations and scope.
 - Mock integration tests cover tool calls, persistence/recovery, real browser-rendered slides, Markdown and ZIP, reorder/style/deletion/stale-content checks, and network boundary tests. **Live Tavily and a live-model autonomous end-to-end run have not been verified in this implementation session.**
+
+### Parser dependency
+
+HTML5 parsing replaces ad-hoc regular-expression tag stripping, which can reconstruct markup from malformed input. `parse5` is imported only when an HTML page is read; plain-text reading and app startup do not load it. It is a direct production dependency rather than relying on an incidental development/transitive install, so packaged apps have it available.
+
+- `parse5` 8.0.1: MIT, 337,099 registry-unpacked bytes.
+- Locked transitive `entities` 8.1.0: BSD-2-Clause, 330,191 registry-unpacked bytes; compatible with Node 22.
+- Combined registry-unpacked size: 667,290 bytes (about 652 KiB); this is not a measured installer delta.
+
+Existing lightweight HTML string helpers are not a full HTML5 parser; using a browser would add execution/resource-loading risk to a read-only tool. A peer dependency would make the shipped reader unreliable when the user has not separately installed a parser.
 
 Focused checks:
 

@@ -4,6 +4,7 @@ import { request as httpRequest, type RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import type { WebResearchNetwork, WebSource } from '@open-codesign/shared';
+import type { DefaultTreeAdapterTypes } from 'parse5';
 
 const blocked = new BlockList();
 for (const [ip, bits] of [
@@ -190,39 +191,116 @@ export function normalizeSearchResults(
   }
   return sources;
 }
-function decodeEntities(text: string): string {
-  return text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, entity: string) => {
-    if (entity.startsWith('#')) {
-      const number =
-        entity[1]?.toLowerCase() === 'x'
-          ? Number.parseInt(entity.slice(2), 16)
-          : Number.parseInt(entity.slice(1), 10);
-      return number > 0 && number <= 0x10ffff ? String.fromCodePoint(number) : all;
+const NON_CONTENT_ELEMENTS = new Set([
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'svg',
+  'math',
+  'iframe',
+  'object',
+  'embed',
+  'canvas',
+  'video',
+  'audio',
+]);
+const TEXT_BREAK_ELEMENTS = new Set([
+  'p',
+  'div',
+  'section',
+  'article',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'br',
+  'hr',
+  'li',
+  'ul',
+  'ol',
+  'tr',
+  'td',
+  'th',
+  'table',
+  'header',
+  'footer',
+  'nav',
+  'main',
+  'aside',
+  'dl',
+  'dt',
+  'dd',
+  'blockquote',
+  'pre',
+]);
+
+// Extract untrusted text, never HTML safe for insertion. Parsing does not execute
+// scripts or load resources; a regex replacement can reconstruct markup instead.
+export async function readableHtml(html: string): Promise<{ text: string; title: string | null }> {
+  const { parse } = await import('parse5');
+  const document = parse(html, { scriptingEnabled: true });
+  const text: string[] = [];
+  let title: string | null = null;
+  type Frame = { node: DefaultTreeAdapterTypes.Node; inBody: boolean } | { lineBreak: true };
+  const stack: Frame[] = [{ node: document, inBody: false }];
+  while (stack.length) {
+    const frame = stack.pop();
+    if (!frame) break;
+    if ('lineBreak' in frame) {
+      text.push('\n');
+      continue;
     }
-    return (
-      ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' } as Record<string, string>)[
-        entity.toLowerCase()
-      ] ?? all
-    );
-  });
-}
-export function readableHtml(html: string): { text: string; title: string | null } {
-  const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
-  const text = html
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<\/(p|div|section|article|h[1-6]|li|tr)>|<br\s*\/?\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, '');
+    const { node } = frame;
+    let inBody = frame.inBody;
+    if ('tagName' in node) {
+      if (node.tagName === 'title' && title === null) {
+        title =
+          node.childNodes
+            .filter(
+              (child): child is DefaultTreeAdapterTypes.TextNode => child.nodeName === '#text',
+            )
+            .map((child) => child.value)
+            .join('')
+            .replace(/\s+/gu, ' ')
+            .trim()
+            .slice(0, 500) || null;
+        continue;
+      }
+      if (
+        NON_CONTENT_ELEMENTS.has(node.tagName) ||
+        node.attrs.some(
+          (attr) =>
+            attr.name === 'hidden' || (attr.name === 'aria-hidden' && attr.value === 'true'),
+        )
+      ) {
+        if (inBody) text.push('\n');
+        continue;
+      }
+      inBody ||= node.tagName === 'body';
+      if (inBody && TEXT_BREAK_ELEMENTS.has(node.tagName)) {
+        text.push('\n');
+        stack.push({ lineBreak: true });
+      }
+    }
+    if (node.nodeName === '#text' && 'value' in node && inBody) text.push(node.value);
+    if (node.nodeName === '#comment' && inBody) text.push(' ');
+    if ('childNodes' in node) {
+      for (let index = node.childNodes.length - 1; index >= 0; index--) {
+        const child = node.childNodes[index];
+        if (child) stack.push({ node: child, inBody });
+      }
+    }
+  }
   return {
-    text: decodeEntities(text)
-      .replace(/[\t \r]+/g, ' ')
-      .replace(/\n\s*\n+/g, '\n\n')
+    text: text
+      .join('')
+      .replace(/[^\S\n]+/gu, ' ')
+      .replace(/\n{3,}/g, '\n\n')
       .trim(),
-    title: title
-      ? decodeEntities(title.replace(/<[^>]*>/g, ''))
-          .trim()
-          .slice(0, 500) || null
-      : null,
+    title,
   };
 }
 
@@ -347,7 +425,7 @@ export function createWebResearchNetwork(
             );
           const parsed =
             contentType === 'text/html'
-              ? readableHtml(response.body)
+              ? await readableHtml(response.body)
               : { text: response.body, title: null };
           const text = parsed.text.slice(0, options.maxChars);
           if (!text.trim())

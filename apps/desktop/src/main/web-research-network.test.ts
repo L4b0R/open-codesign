@@ -178,12 +178,12 @@ describe('web research network', () => {
       ).fetch('https://example.com'),
     ).rejects.toThrow(/PDF/);
   });
-  it('cleans scripts/styles and decodes text rather than executing content', () => {
+  it('cleans scripts/styles and decodes text rather than executing content', async () => {
     expect(
-      readableHtml(
+      await readableHtml(
         '<title>Test &amp; more</title><script>steal()</script><style>red</style><p>Year 2025 &lt; 2030</p>',
       ),
-    ).toEqual({ title: 'Test & more', text: 'Test & moreYear 2025 < 2030' });
+    ).toEqual({ title: 'Test & more', text: 'Year 2025 < 2030' });
   });
   it('distinguishes disabled, unconfigured, no results, quota failure and budget exhaustion', async () => {
     await expect(
@@ -265,4 +265,76 @@ it('aborts the in-flight request, not only a wrapper promise', async () => {
   await expect(pending).rejects.toThrow(/cancelled/);
   expect(realSignal?.aborted).toBe(true);
   expect(destroy).toHaveBeenCalledOnce();
+});
+
+describe('HTML5 text extraction (not an HTML sanitizer)', () => {
+  it('handles quoted angle brackets and decodes character references once', async () => {
+    expect(
+      await readableHtml(
+        '<title>Market &amp; growth</title><p title="a > b">2 &lt; 3 &amp; 5 &gt; 4 &copy; &#x1F680; &amp;lt;b&amp;gt;</p>',
+      ),
+    ).toEqual({
+      title: 'Market & growth',
+      text: '2 < 3 & 5 > 4 © 🚀 &lt;b&gt;',
+    });
+  });
+  it('omits comments and active/hidden subtrees without joining surrounding data', async () => {
+    const { text } = await readableHtml(
+      '<p>42</p><script src="https://example.com/never-fetch.js">untrustedScript()</script><style>untrustedStyle</style><noscript>fallback</noscript><template><p>hidden-template</p></template><svg><text>hidden-svg</text></svg><iframe>hidden-frame</iframe><p hidden>hidden-attribute</p><p aria-hidden="true">hidden-aria</p><p>43</p>',
+    );
+    expect(text).toBe('42\n\n43');
+    expect(text).not.toMatch(/untrusted|hidden|fallback|4243/);
+  });
+  it('keeps table cells and list items separate instead of creating new numbers', async () => {
+    const { text } = await readableHtml(
+      '<table><tr><td>12</td><td>34</td></tr></table><ul><li>A</li><li>B</li></ul>',
+    );
+    expect(text.split(/\s+/)).toEqual(['12', '34', 'A', 'B']);
+  });
+  it.each([
+    '<scr<script>bad()</script>ipt>alert(1)</script><p>Readable</p>',
+    '<<!-- remove -->script>alert(1)</script><p>Readable</p>',
+    '<!-- outer <!-- nested --> --><p>Readable</p>',
+    '<title>Title &lt;script&gt;literal&lt;/script&gt;</title><p>Readable</p>',
+  ])('parses malformed fragments without manufacturing executable markup: %s', async (html) => {
+    const result = await readableHtml(html);
+    expect(result.text).toContain('Readable');
+    expect(result.text).not.toMatch(/<script|<!--/i);
+  });
+  it.each([
+    'script',
+    'style',
+    'noscript',
+    'template',
+  ])('does not leak an unfinished %s subtree into evidence', async (tag) => {
+    expect((await readableHtml(`<p>Visible</p><${tag}>must-not-be-evidence`)).text).toBe('Visible');
+  });
+  it('preserves encoded tag literals as untrusted text, not markup to render', async () => {
+    const literal = '<script>alert(1)</script>';
+    expect(
+      await readableHtml(
+        '<title>&lt;script&gt;alert(1)&lt;/script&gt;</title><p>&lt;script&gt;alert(1)&lt;/script&gt;</p>',
+      ),
+    ).toEqual({ title: literal, text: literal });
+  });
+  it('uses an iterative tree walk for deeply nested pages', async () => {
+    const html = `${'<div>'.repeat(5000)}Deep text${'</div>'.repeat(5000)}`;
+    expect((await readableHtml(html)).text).toBe('Deep text');
+  });
+  it('keeps fetch output, saved excerpt and truncation consistent after parsing', async () => {
+    const fake = transport([
+      {
+        headers: { 'content-type': 'text/html' },
+        body: `<title>Report</title><script>hidden</script><p>${'x'.repeat(1500)}</p>`,
+      },
+    ]);
+    const result = await createWebResearchNetwork(settings, fake).fetch(
+      'https://example.com/report',
+    );
+    expect(result.text).toBe('x'.repeat(1000));
+    expect(result.source.excerpt).toBe(result.text);
+    expect(result.source.title).toBe('Report');
+    expect(result.truncated).toBe(true);
+    expect(fake.seen).toHaveLength(1);
+  });
 });

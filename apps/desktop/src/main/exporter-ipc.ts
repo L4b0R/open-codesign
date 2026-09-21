@@ -257,7 +257,14 @@ export function registerExporterIpc(
     // Export formats load their heavy deps lazily inside
     // exportArtifact. Errors propagate to the renderer as toasts (PRINCIPLES §10).
     const destinationPath = ensureExportExtension(picked.filePath, req.format);
-    const companion = await prepareResearchExport(resolved);
+    let companion: Awaited<ReturnType<typeof prepareResearchExport>> = null;
+    const researchWarnings: string[] = [];
+    try {
+      companion = await prepareResearchExport(resolved);
+      if (companion) researchWarnings.push(...companion.warnings);
+    } catch (error) {
+      researchWarnings.push(researchExportWarning(error));
+    }
     const assets =
       companion && req.format === 'zip'
         ? [{ path: `sources-${randomUUID().slice(0, 8)}.md`, content: companion.markdown }]
@@ -266,22 +273,31 @@ export function registerExporterIpc(
       ...exportAssetOptions(resolved),
       ...(assets ? { assets } : {}),
     });
-    const sourcesPath =
-      companion && req.format !== 'zip'
-        ? await writeUniqueSources(
-            path.dirname(result.path),
-            `${path.parse(result.path).name}.sources`,
-            companion.markdown,
-          )
-        : undefined;
+    let sourcesPath: string | undefined;
+    if (companion && req.format !== 'zip') {
+      try {
+        sourcesPath = await writeUniqueSources(
+          path.dirname(result.path),
+          `${path.parse(result.path).name}.sources`,
+          companion.markdown,
+        );
+      } catch (error) {
+        researchWarnings.push(researchExportWarning(error));
+      }
+    }
     return {
       status: 'saved',
       path: result.path,
       bytes: result.bytes,
       ...(sourcesPath ? { sourcesPath } : {}),
-      ...(companion ? { researchWarnings: companion.warnings } : {}),
+      ...(companion || researchWarnings.length ? { researchWarnings } : {}),
     };
   });
+}
+
+function researchExportWarning(error: unknown): string {
+  const reason = error instanceof Error ? error.message.slice(0, 800) : 'Unknown sources error.';
+  return `Sources companion was not exported: ${reason}`;
 }
 
 function referencedSourcePath(source: string, currentPath: string): string | null {

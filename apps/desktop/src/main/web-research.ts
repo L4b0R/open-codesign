@@ -98,7 +98,14 @@ export function createResearchHost(options: ResearchHostOptions): ResearchHost {
       }, signal);
     },
     readRecords(signal) {
-      return transaction(async (store) => store, signal);
+      return options.inWorkspace((root) =>
+        withWorkspaceFileWriter(path.join(root, '.codesign', 'research.json'), async () => {
+          signal?.throwIfAborted();
+          const store = await loadResearchStore(root);
+          signal?.throwIfAborted();
+          return store;
+        }),
+      );
     },
   };
 }

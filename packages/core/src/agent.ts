@@ -1191,9 +1191,8 @@ async function generateViaAgentInternal(
       makeAskTool(input.askBridge) as unknown as AgentTool<TSchema, unknown>,
     );
   }
-  if (deps.research) {
-    for (const tool of makeWebResearchTools(deps.research)) defaultToolsByName.set(tool.name, tool);
-  }
+  const researchTools = deps.research ? makeWebResearchTools(deps.research) : [];
+  for (const tool of researchTools) defaultToolsByName.set(tool.name, tool);
   const defaultTools = availableToolNames({
     research: deps.research !== undefined,
     fs: trackedFs !== undefined,
@@ -1213,9 +1212,13 @@ async function generateViaAgentInternal(
     },
   }));
   const encourageToolUse = deps.encourageToolUse ?? tools.length > 0;
+  const researchGuidance =
+    researchTools.length > 0 &&
+    researchTools.every((researchTool) => tools.some((tool) => tool.name === researchTool.name))
+      ? `${WEB_RESEARCH_GUIDANCE}\n\n`
+      : '';
   const baseAgenticGuidance =
-    WEB_RESEARCH_GUIDANCE +
-    '\n\n' +
+    researchGuidance +
     agenticToolGuidance({
       inspectWorkspace: input.inspectWorkspace !== undefined,
       featureProfile,

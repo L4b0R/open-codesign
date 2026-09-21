@@ -2707,3 +2707,39 @@ it('exposes research tools to the actual model-visible Agent list and preserves 
   await search?.execute('call', { query: 'recent industry', count: 1 }, controller.signal);
   expect(research.search).toHaveBeenCalledWith('recent industry', 1, controller.signal);
 });
+
+it('omits research-only guidance and tools when no research host is provided', async () => {
+  scriptedAgent = { assistantText: 'Ready' };
+  await generateViaAgent({
+    prompt: 'A layout-only slide deck',
+    history: [],
+    model: MODEL,
+    apiKey: 'test',
+  });
+  const state = agentCalls[0]?.options.initialState;
+  expect(state?.tools?.map((tool) => tool.name)).not.toContain('research_export');
+  expect(state?.systemPrompt).not.toContain('## Slides research and separate sources');
+  expect(state?.systemPrompt).not.toContain('data-slide-id');
+  expect(state?.systemPrompt).not.toContain('research_export');
+});
+
+it('does not advertise research workflow when an explicit tool override hides the research tools', async () => {
+  scriptedAgent = { assistantText: 'Ready' };
+  const research: import('@open-codesign/shared').ResearchHost = {
+    search: vi.fn(),
+    fetch: vi.fn(),
+    recordEvidence: vi.fn(),
+    linkSlide: vi.fn(),
+    exportSources: vi.fn(),
+    readRecords: vi.fn(),
+  };
+  await generateViaAgent(
+    { prompt: 'A focused edit', history: [], model: MODEL, apiKey: 'test' },
+    { research, tools: [], encourageToolUse: true },
+  );
+  const state = agentCalls[0]?.options.initialState;
+  expect(state?.tools).toEqual([]);
+  expect(state?.systemPrompt).not.toContain('## Slides research and separate sources');
+  expect(state?.systemPrompt).not.toContain('data-slide-id');
+  expect(state?.systemPrompt).not.toContain('research_export');
+});

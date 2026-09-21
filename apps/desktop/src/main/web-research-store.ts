@@ -33,11 +33,16 @@ export function researchSourcePath(raw: string): string {
   return value;
 }
 
-async function storePath(root: string): Promise<string> {
+async function storePath(root: string, createDirectory = false): Promise<string> {
   const dir = path.join(root, '.codesign');
-  await mkdir(dir, { recursive: true });
-  if ((await lstat(dir)).isSymbolicLink())
-    throw new Error('Research directory cannot be a symlink.');
+  if (createDirectory) await mkdir(dir, { recursive: true });
+  try {
+    const stat = await lstat(dir);
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+      throw new Error('Research directory must be a directory, not a symlink.');
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
   const file = path.join(dir, 'research.json');
   try {
     const stat = await lstat(file);
@@ -98,7 +103,7 @@ export async function saveResearchStore(root: string, store: ResearchStore): Pro
   const body = JSON.stringify(store, null, 2);
   if (Buffer.byteLength(body) > MAX_STORE_BYTES)
     throw new Error('Research records exceed the storage limit.');
-  const file = await storePath(root);
+  const file = await storePath(root, true);
   const temp = `${file}.${randomUUID()}.tmp`;
   try {
     await writeFile(temp, body, { flag: 'wx', mode: 0o600 });

@@ -39,7 +39,7 @@ The model can call:
 
 - `web_search(query, count?)`: normalized sources with stable URL-derived IDs, known metadata, and retrieval time; successful results are saved before return.
 - `web_fetch(url)`: bounded readable HTML/plain text, final URL, MIME type and truncation status; saves the original excerpt.
-- `research_records(offset?, id?)`: recover existing source/evidence summaries and slide usage, or retrieve a complete saved source/evidence record by ID without searching again.
+- `research_records(offset?, id?)`: recover existing source/evidence summaries and slide usage, or retrieve a complete saved source/evidence record by ID without searching again. This is read-only: it does not create the research directory/file or rewrite existing records.
 - `research_evidence(...)`: record a fact, calculation, forecast or inference before using it. Facts need an exact saved quote. Unknown references/locators and invented quotations are rejected. Calculations need saved inputs and a formula.
 - `research_slide(path, slideId, evidenceIds)`: capture current rendered page content and replace its evidence association. An empty list clears usage.
 - `research_export(path)`: generate a separate collision-safe `sources.md` from saved records in current page order.
@@ -55,6 +55,8 @@ By default, slides have **no source footers, citation numbers, chart source capt
 - `research_export` creates `sources.md` in the workspace, then `sources-1.md`, etc. if a file already exists. It never overwrites an existing sources file.
 - Ordinary HTML/PDF/PPTX/Markdown exports regenerate a companion `<export-name>.sources.md` **beside the selected output**, using numbered suffixes on collision. The existing export notification includes its path.
 - ZIP exports include a fresh `sources-<unique-suffix>.md` alongside the normal files. The name avoids collisions with existing user assets.
+
+Research companions are optional for ordinary exports. If saved research is corrupt, a deck cannot be inspected, or writing the companion fails, the primary export is still saved and the existing export notification includes a sources warning. No companion path is reported when it was not written. An explicit `research_export` request still fails clearly when its sources cannot be generated; errors from the primary exporter also remain failures.
 
 Only evidence actually registered to current pages (and calculation input evidence) contributes source links. Merely searched/unused links are excluded. Exports include current page numbers/titles, claims, saved excerpts, known metadata, scope, formulas, forecast/inference kinds and uncertainty flags. “Original read” is not a fact-checking certificate.
 

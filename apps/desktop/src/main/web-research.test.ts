@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeWebResearchTools } from '@open-codesign/core';
@@ -299,3 +299,71 @@ it('uses the same nested workspace asset resolution when linking slides and expo
   expect(companion?.warnings).toEqual([]);
   expect(companion?.markdown).toContain(source.url);
 }, 60000);
+
+describe('read-only research records', () => {
+  function hostFor(root: string) {
+    return createResearchHost({
+      network: { search: vi.fn(), fetch: vi.fn() },
+      authorize: async () => {},
+      inWorkspace: (fn) => fn(root),
+    });
+  }
+
+  it('does not create the research file or directory in an empty workspace', async () => {
+    const root = await workspace();
+    const tool = makeWebResearchTools(hostFor(root)).find(
+      (tool) => tool.name === 'research_records',
+    );
+    if (!tool) throw new Error('Missing research_records tool');
+    const result = await tool.execute('read-empty', {});
+    expect(result.details).toMatchObject({ totals: { sources: 0, evidence: 0, usages: 0 } });
+    await expect(stat(join(root, '.codesign'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not create a missing research file inside an existing settings directory', async () => {
+    const root = await workspace();
+    await mkdir(join(root, '.codesign'));
+    await writeFile(join(root, '.codesign', 'settings.json'), '{"schemaVersion":1}');
+    expect(await hostFor(root).readRecords()).toEqual(store());
+    await expect(stat(join(root, '.codesign', 'research.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await readFile(join(root, '.codesign', 'settings.json'), 'utf8')).toBe(
+      '{"schemaVersion":1}',
+    );
+  });
+
+  it('preserves existing record bytes and modification time when the read tool runs', async () => {
+    const root = await workspace();
+    const records = store();
+    saveSources(records, [source]);
+    await saveResearchStore(root, records);
+    const file = join(root, '.codesign', 'research.json');
+    const bytes = JSON.stringify(records);
+    await writeFile(file, bytes);
+    const timestamp = new Date('2020-01-01T00:00:00Z');
+    await utimes(file, timestamp, timestamp);
+    const before = await stat(file);
+    const tool = makeWebResearchTools(hostFor(root)).find(
+      (tool) => tool.name === 'research_records',
+    );
+    if (!tool) throw new Error('Missing research_records tool');
+    await tool.execute('read-existing', {});
+    expect(await readFile(file, 'utf8')).toBe(bytes);
+    expect((await stat(file)).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it('does not replace corrupt records during a read or explicit source export', async () => {
+    const root = await workspace();
+    await mkdir(join(root, '.codesign'));
+    const file = join(root, '.codesign', 'research.json');
+    await writeFile(file, '{corrupt');
+    const host = hostFor(root);
+    await expect(host.readRecords()).rejects.toThrow('Cannot restore research records');
+    await expect(host.exportSources('deck.html')).rejects.toThrow(
+      'Cannot restore research records',
+    );
+    expect(await readFile(file, 'utf8')).toBe('{corrupt');
+    await expect(stat(join(root, 'sources.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});

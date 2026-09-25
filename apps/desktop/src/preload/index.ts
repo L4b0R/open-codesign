@@ -28,6 +28,10 @@ import type {
   ResourceStateV1,
   SelectedElement,
   SnapshotCreateInput,
+  SourceEditApplyRequestV1,
+  SourceEditApplyResultV1,
+  SourceEditInspectRequestV1,
+  SourceEditInspectResultV1,
   SupportedOnboardingProvider,
   WireApi,
 } from '@open-codesign/shared';
@@ -176,6 +180,8 @@ export interface RenameDesignOptions {
 }
 
 export interface ExportInvokeResponse {
+  sourcesPath?: string;
+  researchWarnings?: string[];
   status: 'saved' | 'cancelled';
   path?: string;
   bytes?: number;
@@ -243,6 +249,8 @@ export interface GenerateArtifact {
 }
 
 export interface GenerateResponse {
+  snapshotId?: string;
+  chatPersisted?: boolean;
   message: string;
   artifacts: GenerateArtifact[];
   inputTokens: number;
@@ -293,12 +301,18 @@ export interface AgentStreamEvent {
     | 'fs_updated'
     | 'agent_end'
     | 'active_message'
+    | 'run_settled'
     | 'error';
   designId: string;
   /** Trace ID linking this event to the main-process generation log entry.
    *  Matches the generationId from the codesign:v1:generate payload — always
    *  present because the main process supplies it from baseCtx. */
   generationId: string;
+  runId?: string;
+  seq?: number;
+  schemaVersion?: 1;
+  outcome?: 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  response?: GenerateResponse;
   activeMessage?: ActiveRunMessageV1;
   // turn_start
   turnId?: string;
@@ -396,9 +410,30 @@ export interface AskResult {
   answers: AskAnswer[];
 }
 export interface AskRequest {
+  runId?: string;
+  designId?: string;
   requestId: string;
   sessionId: string;
   input: AskInput;
+}
+
+export interface AskHistoryEntry extends AskRequest {
+  schemaVersion: 1;
+  status: 'pending' | 'answered' | 'cancelled' | 'interrupted';
+  createdAt: number;
+  updatedAt: number;
+  result?: AskResult;
+}
+export interface AskResolved {
+  requestId: string;
+  sessionId: string;
+  runId?: string;
+  designId?: string;
+  status: 'answered' | 'cancelled' | 'interrupted';
+}
+export interface RunRecoveryResult {
+  schemaVersion: 1;
+  events: AgentStreamEvent[];
 }
 
 const api = {
@@ -428,6 +463,11 @@ const api = {
       schemaVersion: 1,
       generationId,
     } satisfies CancelGenerationPayloadV1),
+  recoverRuns: (cursors: Record<string, number> = {}) =>
+    ipcRenderer.invoke('codesign:v1:recover-runs', {
+      schemaVersion: 1,
+      cursors,
+    }) as Promise<RunRecoveryResult>,
   generationStatus: () =>
     ipcRenderer.invoke('codesign:v1:generation-status') as Promise<GenerationStatusResult>,
   sendActiveMessage: (payload: ActiveRunMessageInputV1) =>
@@ -648,6 +688,18 @@ const api = {
       ipcRenderer.invoke('ollama:v1:probe', baseUrl) as Promise<
         { ok: true; models: string[] } | { ok: false; code: string; message: string }
       >,
+  },
+  sourceEdits: {
+    inspect: (input: SourceEditInspectRequestV1) =>
+      ipcRenderer.invoke(
+        'codesign:source-edits:v1:inspect',
+        input,
+      ) as Promise<SourceEditInspectResultV1>,
+    apply: (input: SourceEditApplyRequestV1) =>
+      ipcRenderer.invoke(
+        'codesign:source-edits:v1:apply',
+        input,
+      ) as Promise<SourceEditApplyResultV1>,
   },
   files: {
     list: (designId: string) =>
@@ -940,6 +992,13 @@ const api = {
   openExternal: (url: string) =>
     ipcRenderer.invoke('codesign:v1:open-external', url) as Promise<void>,
   ask: {
+    history: (filter?: { runId?: string; designId?: string }) =>
+      ipcRenderer.invoke('ask:history', filter) as Promise<AskHistoryEntry[]>,
+    onResolved: (cb: (event: AskResolved) => void) => {
+      const listener = (_e: unknown, event: AskResolved) => cb(event);
+      ipcRenderer.on('ask:resolved', listener);
+      return () => ipcRenderer.removeListener('ask:resolved', listener);
+    },
     pending: () => ipcRenderer.invoke('ask:list-pending') as Promise<AskRequest[]>,
     onRequest: (cb: (req: AskRequest) => void) => {
       const listener = (_e: unknown, req: AskRequest) => cb(req);

@@ -15,6 +15,7 @@ export {
 export const ProviderId = z.enum([
   'anthropic',
   'openai',
+  'atlascloud',
   'google',
   'openrouter',
   'groq',
@@ -47,6 +48,7 @@ export {
   parseDesignMd,
   validateDesignMd,
 } from './design-md';
+export * from './source-edits';
 export { DEFAULT_SOURCE_ENTRY, LEGACY_SOURCE_ENTRY } from './source-entries';
 export { inspectTweakSource, type TweakSourceState } from './tweak-source';
 
@@ -617,3 +619,5 @@ export {
   replaceEditmodeBlock,
   replaceTweakSchema,
 } from './editmode';
+
+export * from './web-research';

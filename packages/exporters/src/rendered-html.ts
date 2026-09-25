@@ -50,6 +50,7 @@ export function shouldRenderForStaticDom(
 export async function renderArtifactBodyHtml(
   artifactSource: string,
   opts: BrowserRenderOptions = {},
+  evaluation = 'document.body ? document.body.innerHTML : ""',
 ): Promise<string> {
   const { findSystemChrome } = await import('./chrome-discovery');
   const puppeteer = (await import('puppeteer-core')).default;
@@ -80,7 +81,7 @@ export async function renderArtifactBodyHtml(
     if (opts.settleMs && opts.settleMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, opts.settleMs));
     }
-    return String(await page.evaluate('document.body ? document.body.innerHTML : ""'));
+    return String(await page.evaluate(evaluation));
   } finally {
     if (browser) await browser.close();
     await rm(userDataDir, { recursive: true, force: true });

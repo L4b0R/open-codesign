@@ -44,6 +44,7 @@ import {
   shouldForceClaudeCodeIdentity,
   withBackoff,
 } from '@open-codesign/providers';
+import type { ResearchHost } from '@open-codesign/shared';
 import {
   type ChatMessage,
   CodesignError,
@@ -118,6 +119,7 @@ import {
   makeVerifyUiKitVisualParityTool,
   type RenderUiKitFn,
 } from './tools/verify-ui-kit-visual-parity.js';
+import { makeWebResearchTools, WEB_RESEARCH_GUIDANCE } from './tools/web-research.js';
 
 /** Local mirror of the assistant message shape that pi-agent-core emits (via
  *  pi-ai). Declared here so this file does not take a direct dependency on
@@ -269,6 +271,7 @@ function supportsImageInput(wire: WireApi | undefined, modelId: string): boolean
 const BUILTIN_PUBLIC_BASE_URLS: Record<string, string> = {
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com/v1',
+  atlascloud: 'https://api.atlascloud.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
 };
 
@@ -864,6 +867,7 @@ function buildTurnPrompt(input: GenerateInput, fs: TextEditorFsCallbacks | undef
 export type { AgentEvent };
 
 export interface GenerateViaAgentDeps {
+  research?: ResearchHost | undefined;
   activeMessages?: ActiveRunMessages | undefined;
   /** Optional subscriber for Agent lifecycle + streaming events. */
   onEvent?: ((event: AgentEvent) => void) | undefined;
@@ -1053,9 +1057,7 @@ async function generateViaAgentInternal(
   //   - set_title / set_todos / skill / scaffold (always — no deps)
   //   - str_replace_based_edit_tool + done (when fs callbacks are provided)
   //
-  // No generic network-fetch tool is installed here: external fetches must go
-  // through the host's permissioned tool path. DESIGN.md context is injected
-  // into the prompt instead of fetched through a side tool.
+  // Network tools use a main-process permissioned service; no credentials enter core.
   const scaffoldsRoot = input.templatesRoot ? path.join(input.templatesRoot, 'scaffolds') : null;
   const brandRefsRoot = input.templatesRoot ? path.join(input.templatesRoot, 'brand-refs') : null;
   const getWorkspaceRoot = () => input.getWorkspaceRoot?.() ?? input.workspaceRoot ?? null;
@@ -1190,7 +1192,10 @@ async function generateViaAgentInternal(
       makeAskTool(input.askBridge) as unknown as AgentTool<TSchema, unknown>,
     );
   }
+  const researchTools = deps.research ? makeWebResearchTools(deps.research) : [];
+  for (const tool of researchTools) defaultToolsByName.set(tool.name, tool);
   const defaultTools = availableToolNames({
+    research: deps.research !== undefined,
     fs: trackedFs !== undefined,
     preview: input.runPreview !== undefined,
     image: deps.generateImageAsset !== undefined && !imageExplicitlyDisabled,
@@ -1208,11 +1213,18 @@ async function generateViaAgentInternal(
     },
   }));
   const encourageToolUse = deps.encourageToolUse ?? tools.length > 0;
-  const baseAgenticGuidance = agenticToolGuidance({
-    inspectWorkspace: input.inspectWorkspace !== undefined,
-    featureProfile,
-    currentDesignName: promptInput.currentDesignName,
-  });
+  const researchGuidance =
+    researchTools.length > 0 &&
+    researchTools.every((researchTool) => tools.some((tool) => tool.name === researchTool.name))
+      ? `${WEB_RESEARCH_GUIDANCE}\n\n`
+      : '';
+  const baseAgenticGuidance =
+    researchGuidance +
+    agenticToolGuidance({
+      inspectWorkspace: input.inspectWorkspace !== undefined,
+      featureProfile,
+      currentDesignName: promptInput.currentDesignName,
+    });
   const activeGuidance =
     deps.generateImageAsset && !imageExplicitlyDisabled
       ? `${baseAgenticGuidance}\n\n${IMAGE_ASSET_TOOL_GUIDANCE}`

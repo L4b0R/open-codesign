@@ -903,6 +903,25 @@ describe('registerOnboardingIpc — validate-key passes baseUrl to pingProvider'
     expect(pingProvider).toHaveBeenCalledWith('anthropic', 'sk-ant-test', undefined);
   });
 
+  it('forwards Atlas Cloud validation to the provider validator', async () => {
+    const { pingProvider } = await import('@open-codesign/providers');
+    vi.mocked(pingProvider).mockClear();
+    const handler = handlers.get('onboarding:validate-key');
+    expect(handler).toBeDefined();
+
+    await handler?.({} as unknown, {
+      provider: 'atlascloud',
+      apiKey: 'apikey-test',
+      baseUrl: 'https://api.atlascloud.ai/v1',
+    });
+
+    expect(pingProvider).toHaveBeenCalledWith(
+      'atlascloud',
+      'apikey-test',
+      'https://api.atlascloud.ai/v1',
+    );
+  });
+
   it('allows explicitly keyless Ollama validation with an empty apiKey', async () => {
     const { pingProvider } = await import('@open-codesign/providers');
     vi.mocked(pingProvider).mockClear();
@@ -1730,5 +1749,142 @@ describe('detectChatgptSubscription — non-ENOENT failure handling', () => {
     const path = join(dir, 'auth.json');
     await writeFile(path, '{"auth_mode":', 'utf8');
     await expect(detectChatgptSubscription(path)).resolves.toBe(false);
+  });
+});
+
+describe('web search settings survive unrelated config saves', () => {
+  it.each([
+    true,
+    false,
+    undefined,
+  ])('preserves enabled=%s and custom limits through settings, imports and reload', async (enabled) => {
+    const { BUILTIN_PROVIDERS, hydrateConfig, parseConfigFlexible, toPersistedV3 } = await import(
+      '@open-codesign/shared'
+    );
+    const cache = await import('./onboarding/config-cache');
+    const crud = await import('./onboarding/providers-crud');
+    const imports = await import('./onboarding/external-imports');
+    const { writeConfig } = await import('./config');
+    const webSearch =
+      enabled === undefined
+        ? undefined
+        : { enabled, maxCalls: 7, timeoutMs: 23000, maxChars: 6000 };
+    const cfg = hydrateConfig({
+      version: 3,
+      activeProvider: 'openai',
+      activeModel: 'gpt-test',
+      providers: { openai: BUILTIN_PROVIDERS.openai, anthropic: BUILTIN_PROVIDERS.anthropic },
+      secrets: {
+        openai: { ciphertext: 'enc:openai-fixture' },
+        anthropic: { ciphertext: 'enc:anthropic-fixture' },
+        tavily: { ciphertext: 'enc:tavily-fixture' },
+      },
+      ...(webSearch ? { webSearch } : {}),
+    });
+    const imported = { ...BUILTIN_PROVIDERS.openai, id: 'imported-fixture', builtin: false };
+    const mutations: Record<string, () => Promise<unknown>> = {
+      switchModel: () =>
+        crud.runSetActiveProvider({ provider: 'openai', modelPrimary: 'another-model' }),
+      switchProvider: () =>
+        crud.runSetActiveProvider({ provider: 'anthropic', modelPrimary: 'claude-test' }),
+      updateProvider: () => crud.runUpdateProvider({ id: 'openai', name: 'Renamed' }),
+      saveProvider: () =>
+        crud.runSetProviderAndModels({
+          provider: 'openai',
+          modelPrimary: 'another-model',
+          apiKey: 'fixture-new-key',
+          setAsActive: true,
+        }),
+      addCustomProvider: () =>
+        crud.runAddCustomProvider({
+          id: 'new-fixture',
+          name: 'New fixture',
+          wire: 'openai-chat',
+          baseUrl: 'https://example.com/v1',
+          defaultModel: 'fixture-model',
+          apiKey: 'fixture-key',
+          setAsActive: false,
+        }),
+      deleteProvider: () => crud.runDeleteProvider('anthropic'),
+      clearDesignSystem: () => cache.setDesignSystem(null),
+      importCodex: () =>
+        imports.runImportCodex({
+          providers: [imported],
+          activeProvider: imported.id,
+          activeModel: imported.defaultModel,
+          envKeyMap: {},
+          apiKeyMap: { [imported.id]: 'fixture-key' },
+          warnings: [],
+        }),
+      importClaude: () =>
+        imports.runImportClaudeCode({
+          provider: imported,
+          apiKey: 'fixture-key',
+          apiKeySource: 'settings-json',
+          userType: 'has-api-key',
+          hasOAuthEvidence: false,
+          activeModel: imported.defaultModel,
+          settingsPath: '/fixture/settings.json',
+          warnings: [],
+        }),
+      importGemini: () =>
+        imports.runImportGemini({
+          kind: 'found',
+          provider: imported,
+          apiKey: 'fixture-key',
+          apiKeySource: 'shell-env',
+          keyPath: null,
+          warnings: [],
+        }),
+      importOpencode: () =>
+        imports.runImportOpencode({
+          providers: [imported],
+          apiKeyMap: { [imported.id]: 'fixture-key' },
+          activeProvider: imported.id,
+          activeModel: imported.defaultModel,
+          warnings: [],
+        }),
+    };
+    for (const [operation, mutate] of Object.entries(mutations)) {
+      cache.setCachedConfig(structuredClone(cfg));
+      vi.mocked(writeConfig).mockClear();
+      await mutate();
+      const saved = vi.mocked(writeConfig).mock.calls.at(-1)?.[0];
+      expect(saved, operation).toBeDefined();
+      if (!saved) throw new Error(`Missing config for ${operation}`);
+      expect({ operation, webSearch: saved.webSearch }).toEqual({ operation, webSearch });
+      expect(cache.getCachedConfig()?.webSearch, operation).toEqual(webSearch);
+      expect(saved.secrets['tavily'], operation).toEqual(cfg.secrets['tavily']);
+      expect(parseConfigFlexible(toPersistedV3(saved)).webSearch, operation).toEqual(webSearch);
+    }
+  });
+
+  it('retains Tavily credentials and web settings when the last model provider is deleted', async () => {
+    const { BUILTIN_PROVIDERS, hydrateConfig } = await import('@open-codesign/shared');
+    const { getCachedConfig, setCachedConfig } = await import('./onboarding/config-cache');
+    const { runDeleteProvider } = await import('./onboarding/providers-crud');
+    const webSearch = { enabled: true, maxCalls: 12, timeoutMs: 15000, maxChars: 10000 };
+    setCachedConfig(
+      hydrateConfig({
+        version: 3,
+        activeProvider: 'openai',
+        activeModel: 'gpt-test',
+        providers: { openai: BUILTIN_PROVIDERS.openai },
+        secrets: {
+          openai: { ciphertext: 'enc:fixture-key' },
+          tavily: { ciphertext: 'enc:tavily-fixture' },
+        },
+        webSearch,
+      }),
+    );
+    await runDeleteProvider('openai');
+    expect(getCachedConfig()).toMatchObject({
+      activeProvider: '',
+      activeModel: '',
+      providers: {},
+      secrets: { tavily: { ciphertext: 'enc:tavily-fixture' } },
+      webSearch,
+    });
+    expect(getCachedConfig()?.secrets['openai']).toBeUndefined();
   });
 });

@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '@mariozechner/pi-agent-core';
@@ -68,6 +68,11 @@ const generateControl = vi.hoisted(() => {
 });
 generateControl.reset();
 
+// This suite exercises IPC handlers in Node, never an Electron process.
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => path.join(os.tmpdir(), fixtureRootName)) },
+  ipcMain: { handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)) },
+}));
 vi.mock('../electron-runtime', () => ({
   app: {
     getPath: vi.fn(() => path.join(os.tmpdir(), fixtureRootName)),
@@ -206,8 +211,14 @@ import {
   listSessionActiveMessages,
   listSessionChatMessages,
 } from '../session-chat';
-import { createDesign, initInMemoryDb, updateDesignWorkspace } from '../snapshots-db';
+import {
+  createDesign,
+  initInMemoryDb,
+  listSnapshots,
+  updateDesignWorkspace,
+} from '../snapshots-db';
 import { registerSnapshotsIpc } from '../snapshots-ipc';
+import { registerSourceEditsIpc } from '../source-edits-ipc';
 import { normalizeWorkspacePath } from '../workspace-path';
 import { registerGenerateIpc } from './generate';
 
@@ -251,6 +262,196 @@ describe('generate IPC workspace rename coordination', () => {
     }
   });
 
+  it('gates source edits with the real generation maps, shared workspace aliases and registry lifecycle', async () => {
+    const db = initTestDb();
+    const design = createDesign(db, 'Generating source');
+    const other = createDesign(db, 'Alias editor');
+    const workspace = path.join(defaultWorkspaceRoot, 'source-busy');
+    const alias = path.join(documentsRoot, 'source-alias');
+    await mkdir(workspace);
+    await symlink(workspace, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const content = 'function App() { return <h1>Title</h1>; }';
+    await writeFile(path.join(workspace, 'App.jsx'), content);
+    updateDesignWorkspace(db, design.id, workspace);
+    updateDesignWorkspace(db, other.id, alias);
+    const dispose = registerGenerateIpc({ db, getMainWindow: () => null });
+    registerSourceEditsIpc(db, () => null);
+    const inspect = (id: string) =>
+      Promise.resolve(
+        getHandler('codesign:source-edits:v1:inspect')(null, {
+          schemaVersion: 1,
+          designId: id,
+          path: 'App.jsx',
+          expectedContent: content,
+        }),
+      );
+    try {
+      expect(await inspect(other.id)).toMatchObject({ status: 'ready' });
+      pendingFixtureGeneration = Promise.resolve(
+        getHandler('codesign:v1:generate')(null, {
+          schemaVersion: 1,
+          generationId: 'source-busy',
+          designId: design.id,
+          prompt: 'Continue',
+          history: [],
+          attachments: [],
+          model: { provider: 'mock-provider', modelId: 'mock-model' },
+        }),
+      );
+      await generateControl.started;
+      expect(await inspect(design.id)).toMatchObject({ status: 'rejected', reason: 'busy' });
+      expect(await inspect(other.id)).toMatchObject({ status: 'rejected', reason: 'busy' });
+      generateControl.release();
+      await pendingFixtureGeneration;
+      expect(await inspect(other.id)).toMatchObject({ status: 'ready' });
+    } finally {
+      dispose();
+    }
+    expect(await inspect(other.id)).toMatchObject({ status: 'rejected', reason: 'unavailable' });
+  });
+  it('journals headless runs and reattaches by sequence without duplicating chat', async () => {
+    vi.mocked(generateViaAgent).mockImplementationOnce(async (_input, deps) => {
+      deps?.onEvent?.({ type: 'turn_start' });
+      deps?.onEvent?.({
+        type: 'tool_execution_start',
+        toolCallId: 'read-one',
+        toolName: 'read',
+        args: { path: 'App.jsx' },
+      });
+      generateControl.markStarted();
+      await generateControl.waitUntilReleased();
+      deps?.onEvent?.({
+        type: 'tool_execution_end',
+        toolCallId: 'read-one',
+        toolName: 'read',
+        isError: false,
+        result: { content: [{ type: 'text', text: 'Read source' }] },
+      });
+      deps?.onEvent?.({ type: 'agent_end', messages: [] });
+      return {
+        message: 'Completed without a renderer',
+        artifacts: [
+          {
+            id: 'headless-artifact',
+            type: 'html',
+            title: 'Headless',
+            content: '<main>Completed</main>',
+            designParams: [],
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        inputTokens: 12,
+        outputTokens: 34,
+        costUsd: 0,
+      };
+    });
+    const db = initTestDb();
+    const design = createDesign(db, 'Recover headless');
+    updateDesignWorkspace(db, design.id, defaultWorkspaceRoot);
+    registerGenerateIpc({ db, getMainWindow: () => null });
+    const recover = getHandler('codesign:v1:recover-runs');
+    pendingFixtureGeneration = Promise.resolve(
+      getHandler('codesign:v1:generate')(null, {
+        schemaVersion: 1,
+        generationId: 'headless',
+        designId: design.id,
+        prompt: 'Continue',
+        history: [],
+        attachments: [],
+        model: { provider: 'mock-provider', modelId: 'mock-model' },
+      }),
+    );
+    await generateControl.started;
+    const first = (await recover(null, { schemaVersion: 1, cursors: {} })) as {
+      events: Array<{ seq: number; type: string }>;
+    };
+    expect(first.events.map((event) => [event.seq, event.type])).toEqual([
+      [1, 'turn_start'],
+      [2, 'tool_call_start'],
+    ]);
+    expect(
+      listSessionChatMessages({ db, sessionDir: db.sessionDir }, design.id)[0]?.payload,
+    ).toMatchObject({ status: 'running' });
+    const firstWindow = { isDestroyed: () => false, send: vi.fn() };
+    const secondWindow = { isDestroyed: () => false, send: vi.fn() };
+    await recover({ sender: firstWindow }, { schemaVersion: 1, cursors: { headless: 2 } });
+    await recover({ sender: secondWindow }, { schemaVersion: 1, cursors: { headless: 2 } });
+    generateControl.release();
+    await expect(pendingFixtureGeneration).resolves.toMatchObject({
+      chatPersisted: true,
+      inputTokens: 12,
+    });
+    for (const subscriber of [firstWindow, secondWindow])
+      expect(subscriber.send).toHaveBeenCalledWith(
+        'agent:event:v1',
+        expect.objectContaining({ type: 'run_settled', seq: 5 }),
+      );
+    const tail = (await recover(null, { schemaVersion: 1, cursors: { headless: 2 } })) as {
+      events: Array<{ seq: number; type: string }>;
+    };
+    expect(tail.events.map((event) => event.seq)).toEqual([3, 4, 5]);
+    expect(tail.events.at(-1)).toMatchObject({
+      type: 'run_settled',
+      outcome: 'completed',
+      response: { inputTokens: 12, outputTokens: 34 },
+    });
+    const rows = listSessionChatMessages({ db, sessionDir: db.sessionDir }, design.id);
+    expect(rows.map((row) => row.kind)).toEqual([
+      'tool_call',
+      'assistant_text',
+      'artifact_delivered',
+    ]);
+    const snapshots = listSnapshots(db, design.id);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.artifactSource).toBe('<main>Completed</main>');
+    expect(tail.events.at(-1)).toMatchObject({ response: { snapshotId: snapshots[0]?.id } });
+    expect(rows[0]?.payload).toMatchObject({ status: 'done' });
+    await recover(null, { schemaVersion: 1, cursors: {} });
+    registerGenerateIpc({ db, getMainWindow: () => null });
+    await getHandler('codesign:v1:recover-runs')(null, { schemaVersion: 1, cursors: {} });
+    expect(listSessionChatMessages({ db, sessionDir: db.sessionDir }, design.id)).toEqual(rows);
+    expect(listSnapshots(db, design.id)).toEqual(snapshots);
+    expect(vi.mocked(generateViaAgent)).toHaveBeenCalledOnce();
+  });
+
+  it('persists preparation failures and validates recovery cursors', async () => {
+    vi.mocked(preparePromptContext).mockRejectedValueOnce(new Error('Reference unavailable'));
+    const db = initTestDb();
+    const design = createDesign(db, 'Failed preflight');
+    updateDesignWorkspace(db, design.id, defaultWorkspaceRoot);
+    registerGenerateIpc({ db, getMainWindow: () => null });
+    await expect(
+      getHandler('codesign:v1:generate')(null, {
+        schemaVersion: 1,
+        generationId: 'failed-preflight',
+        designId: design.id,
+        prompt: 'Continue',
+        history: [],
+        attachments: [],
+        model: { provider: 'mock-provider', modelId: 'mock-model' },
+      }),
+    ).rejects.toThrow('Reference unavailable');
+    const recover = getHandler('codesign:v1:recover-runs');
+    const recovered = (await recover(null, { schemaVersion: 1, cursors: {} })) as {
+      events: unknown[];
+    };
+    expect(recovered.events.at(-1)).toMatchObject({
+      type: 'run_settled',
+      outcome: 'failed',
+      message: 'Reference unavailable',
+      seq: 1,
+    });
+    expect(
+      listSessionChatMessages({ db, sessionDir: db.sessionDir }, design.id).map((row) => row.kind),
+    ).toEqual(['error']);
+    await expect(recover(null, { schemaVersion: 1, cursors: { '../escape': 1 } })).rejects.toThrow(
+      'cursor',
+    );
+    await expect(recover(null, { schemaVersion: 1, cursors: { run: -1 } })).rejects.toThrow(
+      'cursor',
+    );
+    expect(vi.mocked(generateViaAgent)).not.toHaveBeenCalled();
+  });
   it('recovers interrupted persisted requests without starting another generation', async () => {
     const db = initTestDb();
     const design = createDesign(db, 'Recovered requests');

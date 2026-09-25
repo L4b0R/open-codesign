@@ -160,6 +160,10 @@ describe('registerOnboardingIpc — channel versioning', () => {
         hasKey: true,
       });
       expect(await save?.({}, { enabled: true })).toEqual({ enabled: true, hasKey: true });
+      const listProviders = handlers.get('settings:v1:list-providers');
+      expect(listProviders).toBeDefined();
+      expect(await listProviders?.({})).toEqual([]);
+      expect(await get?.({})).toEqual({ enabled: true, hasKey: true });
       expect(probe).not.toHaveBeenCalled();
       expect(await test?.({})).toEqual({ status: 'ok' });
       expect(probe).toHaveBeenCalledExactlyOnceWith('tvly-ipc-fixture', 15000);

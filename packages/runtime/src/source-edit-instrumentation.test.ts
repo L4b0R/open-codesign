@@ -30,11 +30,19 @@ function planFor(source: string, tags: string[]): SourceEditPreviewOptions {
   };
 }
 
-function artifactCompileInput(document: string): { source: string; options: object } {
+function artifactCompileInput(document: string): {
+  source: string;
+  options: object;
+  offset: number;
+} {
   const matches = [...document.matchAll(/var source = (.+);\n {2}var options = (.+);/g)];
   const artifact = matches.at(-1);
   if (!artifact?.[1] || !artifact[2]) throw new Error('Missing artifact compile input');
-  return { source: JSON.parse(artifact[1]) as string, options: JSON.parse(artifact[2]) as object };
+  return {
+    source: JSON.parse(artifact[1]) as string,
+    options: JSON.parse(artifact[2]) as object,
+    offset: artifact.index,
+  };
 }
 
 const babel = new Function('exports', 'module', `${BABEL_STANDALONE}\nreturn exports;`)({}, {}) as {
@@ -85,17 +93,11 @@ describe('source edit preview instrumentation', () => {
     const document = buildInteractivePreviewDocument(source, { path: 'App.jsx', sourceEdit: plan });
     const compiled = artifactCompileInput(document);
     expect(() => babel.transform(compiled.source, compiled.options)).not.toThrow();
-    const scripts = [...document.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(
-      (match) => match[1] ?? '',
-    );
-    const observerIndex = scripts.findIndex((script) =>
-      script.includes('textObserver.observe(document.documentElement'),
-    );
-    const artifactIndex = scripts.findIndex(
-      (script) => script.includes('var source =') && script.includes('Cart ('),
-    );
+    // Check generator-owned markers, not HTML tag syntax: the observer must precede user code.
+    const observerIndex = document.indexOf('textObserver.observe(document.documentElement');
     expect(observerIndex).toBeGreaterThanOrEqual(0);
-    expect(artifactIndex).toBeGreaterThan(observerIndex);
+    expect(compiled.source).toContain('Cart (');
+    expect(compiled.offset).toBeGreaterThan(observerIndex);
   });
 
   it('honors inspected offsets through greater-than text and nested JSX attributes', () => {

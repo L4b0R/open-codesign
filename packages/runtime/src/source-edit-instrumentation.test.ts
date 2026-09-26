@@ -59,6 +59,45 @@ describe('source edit preview instrumentation', () => {
     );
   });
 
+  it('carries field plans for mixed text without adding DOM wrappers or rewriting expressions', () => {
+    const source = 'function App(){const count=2;return <button>Cart ({count})</button>}';
+    const plan = planFor(source, ['button']);
+    const target = plan.targets[0];
+    if (!target) throw new Error('Missing target');
+    target.textLayout = [
+      { kind: 'text', textId: '1:2', value: 'Cart (' },
+      { kind: 'dynamic' },
+      { kind: 'text', textId: '3:4', value: ')' },
+    ];
+    target.editableFields = [
+      { kind: 'set-text', textId: '1:2', value: 'Cart (' },
+      { kind: 'set-text', textId: '3:4', value: ')' },
+    ];
+    const instrumented = instrumentSourceForEditing(source, plan);
+    expect(instrumented.context.fieldPlans?.[target.id]).toEqual({
+      textLayout: target.textLayout,
+      editableFields: target.editableFields,
+    });
+    expect(
+      instrumented.source.replace(/ data-codesign-source-id="[A-Za-z0-9_-]+:\d+:\d+"/g, ''),
+    ).toBe(source);
+    expect(instrumented.source).not.toContain('<span');
+    const document = buildInteractivePreviewDocument(source, { path: 'App.jsx', sourceEdit: plan });
+    const compiled = artifactCompileInput(document);
+    expect(() => babel.transform(compiled.source, compiled.options)).not.toThrow();
+    const scripts = [...document.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(
+      (match) => match[1] ?? '',
+    );
+    const observerIndex = scripts.findIndex((script) =>
+      script.includes('textObserver.observe(document.documentElement'),
+    );
+    const artifactIndex = scripts.findIndex(
+      (script) => script.includes('var source =') && script.includes('Cart ('),
+    );
+    expect(observerIndex).toBeGreaterThanOrEqual(0);
+    expect(artifactIndex).toBeGreaterThan(observerIndex);
+  });
+
   it('honors inspected offsets through greater-than text and nested JSX attributes', () => {
     const source =
       'function App(){return <div title="a > b" data-label={<span>Label</span>}>Body</div>}';

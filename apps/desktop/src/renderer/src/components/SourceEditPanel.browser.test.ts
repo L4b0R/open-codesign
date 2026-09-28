@@ -379,7 +379,7 @@ describe('full FilesTab source edit browser + real IPC handlers over HTTP', () =
     expect(await page.$('aside select')).toBeNull();
     await assertPanelLayout();
   }
-  async function save(label: string, value: string) {
+  async function save(label: string, value: string, clickDelay = 0) {
     const selector = `[aria-label="Save source definition: ${label}"]`;
     const button = await page.waitForSelector(selector);
     if (!button) throw new Error('Missing save control');
@@ -400,7 +400,7 @@ describe('full FilesTab source edit browser + real IPC handlers over HTTP', () =
     await page.keyboard.press('A');
     await page.keyboard.up('Control');
     await page.keyboard.type(value);
-    await page.click(selector);
+    await page.click(selector, { delay: clickDelay });
   }
   async function loadPreviewOnlyFixture() {
     await writeFile(join(workspace, 'App.jsx'), previewOnlyFixture);
@@ -451,8 +451,8 @@ describe('full FilesTab source edit browser + real IPC handlers over HTTP', () =
     if (!label) throw new Error(`Missing text field for ${value}`);
     return label;
   }
-  async function saveText(previous: string, value: string) {
-    await save(await textLabel(previous), value);
+  async function saveText(previous: string, value: string, clickDelay = 0) {
+    await save(await textLabel(previous), value, clickDelay);
   }
   async function assertPreviewText(selector: string, value: string) {
     await expect
@@ -1045,11 +1045,15 @@ describe('full FilesTab source edit browser + real IPC handlers over HTTP', () =
     const iframe = await frame.frameElement();
     if (!iframe) throw new Error('Missing selected preview iframe');
     await iframe.evaluate((node) => {
-      const save = document.querySelector('[aria-label="Save source definition: Text 1"]');
-      // Same-window FIFO delivers this mutation before the real click/submit
-      // validation request, without intercepting or replacing either protocol message.
-      save?.addEventListener(
-        'pointerdown',
+      const form = document
+        .querySelector('[aria-label="Save source definition: Text 1"]')
+        ?.closest('form');
+      if (!form) throw new Error('Missing source edit form');
+      // The submit capture and React handler share one event turn. A pointerdown
+      // hook lets the overlay disable Save before submit. Same-window FIFO still
+      // delivers the mutation before validation, without replacing either message.
+      form.addEventListener(
+        'submit',
         () => {
           (node as HTMLIFrameElement).contentWindow?.postMessage(
             { type: 'TEST_MUTATE_BEFORE_SAVE' },
@@ -1059,7 +1063,8 @@ describe('full FilesTab source edit browser + real IPC handlers over HTTP', () =
         { capture: true, once: true },
       );
     });
-    await saveText('Stable text', 'Must not save');
+    // Hold across the overlay's 200 ms refresh to expose pre-submit mutation races.
+    await saveText('Stable text', 'Must not save', 300);
     await page.waitForFunction(() =>
       document.querySelector('aside[aria-busy]')?.textContent?.includes('could not be verified'),
     );

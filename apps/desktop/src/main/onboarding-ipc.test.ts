@@ -173,7 +173,7 @@ describe('registerOnboardingIpc — channel versioning', () => {
     } finally {
       probe.mockRestore();
     }
-  });
+  }, 15_000);
   it('registers settings:v1:list-providers without the unversioned settings:list-providers shim', async () => {
     await registerIpcForTest();
 

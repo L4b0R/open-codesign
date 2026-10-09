@@ -6,6 +6,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import PptxGenJS from 'pptxgenjs';
 import { describe, expect, it, vi } from 'vitest';
 import { extract } from 'zip-lib';
+import { jpeg } from '../fixtures/native-image';
 import {
   addNativeSlides,
   type NativeSlideElement,
@@ -76,7 +77,10 @@ function fixture(): NativeSlideModel {
   };
 }
 
-async function inspectPresentation(pres: PptxGenJS, inspect: (parts: Map<string, string>) => void) {
+async function inspectPresentation(
+  pres: PptxGenJS,
+  inspect: (parts: Map<string, string>, media: Map<string, Buffer>) => void,
+) {
   const directory = await mkdtemp(join(tmpdir(), 'pptx-native-model-'));
   try {
     const destination = join(directory, 'native.pptx');
@@ -94,7 +98,9 @@ async function inspectPresentation(pres: PptxGenJS, inspect: (parts: Map<string,
       ),
     );
     const parts = new Map<string, string>();
+    const media = new Map<string, Buffer>();
     for (const name of names) {
+      if (name.startsWith('ppt/media/')) media.set(name, await readFile(join(unpacked, name)));
       if (!name.endsWith('.xml') && !name.endsWith('.rels')) continue;
       const xml = await readFile(join(unpacked, name), 'utf8');
       const document = parseXml(xml);
@@ -121,7 +127,7 @@ async function inspectPresentation(pres: PptxGenJS, inspect: (parts: Map<string,
     for (const override of overrides) {
       expect(names.has(override.slice(1)), `missing ContentTypes part ${override}`).toBe(true);
     }
-    inspect(parts);
+    inspect(parts, media);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -145,6 +151,72 @@ function shapeNode(model: NativeSlideModel) {
 }
 
 describe('native slide writer', () => {
+  it.each([
+    ['PNG', png.replace('image/png', 'image/PNG'), 'png', 'image/png'],
+    ['JPG', jpeg.replace('image/jpeg', 'image/jpg'), 'jpeg', 'image/jpeg'],
+    [
+      'mixed-case JPEG header',
+      jpeg.replace('data:image/jpeg;base64', 'DATA:IMAGE/JpEg;BASE64'),
+      'jpeg',
+      'image/jpeg',
+    ],
+    [
+      'GIF',
+      'data:image/GIF;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==',
+      'gif',
+      'image/gif',
+    ],
+  ])('normalizes %s MIME without changing embedded image bytes', async (_name, data, extension, mime) => {
+    const pres = new PptxGenJS();
+    pres.layout = 'LAYOUT_WIDE';
+    const model = fixture();
+    const image = required(model.elements[2]);
+    if (image.type !== 'image') throw new Error('Expected image fixture');
+    image.data = required(data);
+    addNativeSlides(pres, [model]);
+    expect(image.data).toBe(data);
+    await inspectPresentation(pres, (parts, media) => {
+      const rels = parseXml(parts.get('ppt/slides/_rels/slide1.xml.rels') ?? '');
+      const rel = Array.from(rels.getElementsByTagNameNS(relationships, 'Relationship')).find(
+        (entry) => entry.getAttribute('Type')?.endsWith('/image'),
+      );
+      const target = rel?.getAttribute('Target') ?? '';
+      expect(posix.extname(target)).toBe(`.${extension}`);
+      expect(media.get(posix.normalize(posix.join('ppt/slides', target)))).toEqual(
+        Buffer.from(required(data).split(',')[1] ?? '', 'base64'),
+      );
+      const types = parseXml(parts.get('[Content_Types].xml') ?? '');
+      const imageType = Array.from(types.getElementsByTagNameNS(contentTypes, 'Default')).find(
+        (entry) => entry.getAttribute('Extension') === extension,
+      );
+      expect(imageType?.getAttribute('ContentType')).toBe(mime);
+      const slide = parseXml(parts.get('ppt/slides/slide1.xml') ?? '');
+      expect(slide.getElementsByTagNameNS(presentation, 'pic')).toHaveLength(1);
+      expect(slide.getElementsByTagNameNS(drawing, 't')[0]?.textContent).toBe('中文 Native text');
+    });
+  });
+
+  it.each([
+    'data:image/jpg;base64,',
+    'data:image/PNG;base64,abc$=',
+    'data:image/JPEG;base64,AAAA===',
+    'data:image/jpg;base64,AA AA',
+    'data:image/webp;base64,AAAA',
+  ])('rejects malformed image data %s before adding any slides', async (data) => {
+    const pres = new PptxGenJS();
+    pres.layout = 'LAYOUT_WIDE';
+    pres.addSlide().addText('Existing slide');
+    const bad = fixture();
+    Object.assign(required(bad.elements[2]), { data });
+    expect(() => addNativeSlides(pres, [fixture(), bad])).toThrow(
+      'Slide 2, object 3 (image): image.data',
+    );
+    await inspectPresentation(pres, (parts) => {
+      expect(parts.has('ppt/slides/slide2.xml')).toBe(false);
+      expect(parts.get('ppt/slides/slide1.xml')).toContain('Existing slide');
+    });
+  });
+
   it('fits slides proportionally and rejects invalid dimensions', () => {
     expect(slideTransform(1280, 720).offsetX).toBeCloseTo(0);
     expect(slideTransform(1280, 720).offsetY).toBeCloseTo(0);

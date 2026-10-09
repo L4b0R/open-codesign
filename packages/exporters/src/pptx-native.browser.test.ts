@@ -1,8 +1,10 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
+import { DOMParser } from '@xmldom/xmldom';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { extract } from 'zip-lib';
+import { jpeg } from '../fixtures/native-image';
 import { findSystemChrome } from './chrome-discovery';
 import { exportPptx } from './pptx';
 import { renderNativeSlides } from './pptx-native';
@@ -31,6 +33,49 @@ describe.skipIf(!chromePath)('native PPTX in system Chromium', () => {
   afterAll(async () => {
     await rm(directory, { recursive: true, force: true });
   });
+
+  it.each([
+    ['JPG', jpeg.replace('image/jpeg', 'image/jpg'), 'jpeg'],
+    ['JPEG', jpeg.replace('image/jpeg', 'image/JPEG'), 'jpeg'],
+    ['PNG', `data:image/PNG;base64,${png}`, 'png'],
+  ])(
+    'exports %s data URLs as independent images alongside editable text',
+    async (name, data, extension) => {
+      const destination = join(directory, `mime-${name}.pptx`);
+      const result = await exportPptx(
+        html(
+          `<section class="slide"><p>Editable foreground</p><img src="${data}" style="width:96px;height:96px" /></section>`,
+        ),
+        destination,
+        { ...options, sourcePath: 'deck.html', renderMode: 'native' },
+      );
+      expect(result.warnings?.some((warning) => warning.includes('rasterized')) ?? false).toBe(
+        false,
+      );
+      const unpacked = join(directory, `mime-${name}-unpacked`);
+      await extract(destination, unpacked);
+      const parser = new DOMParser();
+      const slide = parser.parseFromString(
+        await readFile(join(unpacked, 'ppt/slides/slide1.xml'), 'utf8'),
+        'application/xml',
+      );
+      expect(slide.getElementsByTagName('p:pic')).toHaveLength(1);
+      expect(slide.getElementsByTagName('a:t')[0]?.textContent).toBe('Editable foreground');
+      const rels = parser.parseFromString(
+        await readFile(join(unpacked, 'ppt/slides/_rels/slide1.xml.rels'), 'utf8'),
+        'application/xml',
+      );
+      const imageRel = Array.from(rels.getElementsByTagName('Relationship')).find((entry) =>
+        entry.getAttribute('Type')?.endsWith('/image'),
+      );
+      const target = imageRel?.getAttribute('Target') ?? '';
+      expect(posix.extname(target)).toBe(`.${extension}`);
+      expect(await readFile(join(unpacked, 'ppt/slides', target))).toEqual(
+        Buffer.from(data?.split(',')[1] ?? '', 'base64'),
+      );
+    },
+    30_000,
+  );
 
   it('extracts grid cards, CJK rich text, shapes and independent local images', async () => {
     await writeFile(join(directory, 'sample.png'), Buffer.from(png, 'base64'));

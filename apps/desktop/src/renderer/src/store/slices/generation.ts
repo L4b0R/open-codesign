@@ -1141,7 +1141,10 @@ export function makeGenerationSlice(set: SetState, get: GetState): GenerationSli
     },
 
     async exportActive(format: ExportFormat, renderMode?: 'image' | 'native') {
-      recordAction({ type: 'design.export', data: { format } });
+      recordAction({
+        type: 'design.export',
+        data: { format, ...(renderMode !== undefined ? { renderMode } : {}) },
+      });
       const source = get().previewSource;
       if (!source) {
         set({ toastMessage: tr('notifications.noDesignToExport') });

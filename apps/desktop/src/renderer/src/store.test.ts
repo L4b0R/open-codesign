@@ -9,6 +9,7 @@ import type {
   SelectedElement,
 } from '@open-codesign/shared';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetTimeline, snapshotTimeline } from './lib/action-timeline';
 import {
   coerceUsageSnapshot,
   extractCodesignErrorCode,
@@ -2290,6 +2291,28 @@ describe('useCodesignStore artifact persistence', () => {
 });
 
 describe('PPTX export requests', () => {
+  beforeAll(async () => {
+    await initI18n('en');
+  });
+  afterEach(resetTimeline);
+
+  it.each([
+    [undefined, { format: 'pptx' }],
+    ['image', { format: 'pptx', renderMode: 'image' }],
+    ['native', { format: 'pptx', renderMode: 'native' }],
+  ] as const)('records mode %s in the local export action timeline', async (renderMode, expected) => {
+    resetTimeline();
+    vi.stubGlobal('window', {
+      codesign: { export: vi.fn().mockResolvedValue({ status: 'saved', path: '/tmp/deck.pptx' }) },
+      setTimeout,
+    });
+    useCodesignStore.setState({ currentDesignId: null, previewSource: '<section>Deck</section>' });
+    await useCodesignStore.getState().exportActive('pptx', renderMode);
+    const exports = snapshotTimeline().filter((entry) => entry.type === 'design.export');
+    expect(exports).toHaveLength(1);
+    expect(exports[0]?.data).toEqual(expected);
+  });
+
   it.each([
     undefined,
     'image',

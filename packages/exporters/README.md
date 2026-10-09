@@ -42,7 +42,7 @@ function App() {
 - Use explicit slide dimensions. Ordinary slides retain the existing widescreen fit with whitespace for other aspect ratios, never stretching. The single-poster path above instead preserves the source page aspect ratio.
 - Browser-computed grid/flex positions are supported for layout; PowerPoint receives fixed geometry, not responsive CSS rules.
 - Text is measured into visual lines, including inline emphasis, explicit line breaks, and letter spacing. Each line becomes a separate editable text box without automatic wrapping or shrinking. Editing a multiline paragraph therefore means editing separate line objects; PowerPoint does not retain the original paragraph's browser reflow behavior.
-- Ordinary PNG/JPEG data assets are preserved as independent source images. Local images are resolved by the existing workspace asset pipeline. Other image formats/crops may be captured as separate PNG objects.
+- Ordinary PNG/JPEG data assets are preserved as independent source images. Data URL MIME names are case-insensitive; the `image/jpg` alias is normalized to `image/jpeg` without changing the embedded bytes. Local images are resolved by the existing workspace asset pipeline. Other image formats/crops may be captured as separate PNG objects.
 - Font names are resolved from the actual platform fonts used by Chromium, rather than only the first requested CSS family. Fonts are not embedded. Install the intended fonts on the destination machine; fallback glyphs, CJK, and Office/Chromium text metrics can still differ.
 
 ### Supported scope and fallback
@@ -67,6 +67,8 @@ corepack pnpm@10.33.4 --filter @open-codesign/exporters typecheck
 Model regressions parse generated PPTX XML and relationship parts with a dev-only XML parser, check internal relationship targets and ContentTypes declarations, and verify literal text/font-name round trips. A persistent pnpm patch for PptxGenJS 4.0.1 repairs font-attribute escaping and nonexistent per-slide master declarations in both its CJS and ESM entry points. The patch is applied through the package configuration and lockfile, not an untracked edit to installed dependencies; maintenance instructions are in [the patch README](../../patches/README.md).
 
 Native browser tests use an existing system Chrome/Chromium/Edge and skip when none is installed; they never download a browser. Coverage includes JSX props/maps, CJK, grids, hidden slides, preview scaling, local assets, measured mixed-font text, explicit line breaks, isolated decoration pixels, clipping/stacking edge cases, document fallback, and error handling.
+
+Serialized browser callbacks use module-local declarations and minimal internal types. Importing the exporter does not enable DOM globals in Node-only consumers, including Electron's main process.
 
 ### Beta acceptance matrix
 

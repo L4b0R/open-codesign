@@ -111,15 +111,23 @@ function objectBox(node: NativeSlideElement, transform: ReturnType<typeof slideT
   return box;
 }
 
+function imageDataUrl(data: unknown): string {
+  const match =
+    typeof data === 'string'
+      ? /^data:image\/(png|jpe?g|gif);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(data)
+      : null;
+  if (!match?.[1] || !match[2]) {
+    throw new Error('image.data must be an embedded PNG, JPEG or GIF base64 data URL.');
+  }
+  const mime = match[1].toLowerCase();
+  // PptxGenJS uses this header verbatim as the media extension; never lowercase image bytes.
+  return `data:image/${mime === 'jpg' ? 'jpeg' : mime};base64,${match[2]}`;
+}
+
 function checkElement(node: NativeSlideElement, scale: number): void {
   if (node.type === 'raster') throw new Error('Unresolved native PPTX raster fallback.');
   if (node.type === 'image') {
-    if (
-      typeof node.data !== 'string' ||
-      !/^data:image\/(png|jpeg|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(node.data)
-    ) {
-      throw new Error('image.data must be an embedded PNG, JPEG or GIF base64 data URL.');
-    }
+    imageDataUrl(node.data);
   } else if (node.type === 'shape') {
     if (!['rect', 'roundRect', 'ellipse'].includes(node.shape))
       throw new Error('Unsupported shape.');
@@ -262,7 +270,7 @@ export function addNativeSlides(pres: PptxGenJS, models: NativeSlideModel[]): st
       const box = objectBox(node, transform);
       if (node.type === 'raster') throw new Error('Unresolved native PPTX raster fallback.');
       if (node.type === 'image') {
-        slide.addImage({ ...box, data: node.data });
+        slide.addImage({ ...box, data: imageDataUrl(node.data) });
       } else if (node.type === 'shape') {
         slide.addShape(pres.ShapeType[node.shape], {
           ...box,

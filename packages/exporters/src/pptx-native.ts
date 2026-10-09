@@ -4,9 +4,28 @@ import { join } from 'node:path';
 import type { Browser, Page } from 'puppeteer-core';
 import { findSystemChrome } from './chrome-discovery';
 import type { ExportPptxOptions } from './pptx';
+import type {
+  BrowserConstructor,
+  BrowserDocument,
+  BrowserElement,
+  BrowserHtmlElement,
+  BrowserStyle,
+  BrowserStyledElement,
+  BrowserWindow,
+} from './pptx-browser-types';
 import { extractNativeSlide } from './pptx-dom';
 import type { NativeSlideModel } from './pptx-model';
 import { buildExportHtmlDocument, shouldRenderForStaticDom } from './rendered-html';
+
+type Element = BrowserElement;
+type HTMLElement = BrowserHtmlElement;
+type SVGElement = BrowserStyledElement;
+declare const document: BrowserDocument;
+declare const window: BrowserWindow;
+declare const Element: BrowserConstructor<Element>;
+declare const HTMLElement: BrowserConstructor<HTMLElement>;
+declare const getComputedStyle: (element: Element, pseudo?: string | null) => BrowserStyle;
+declare const requestAnimationFrame: (callback: (time: number) => void) => number;
 
 const SLIDE_SELECTOR =
   '[data-pptx-slide], [data-slide], [data-slide-container], [data-slide-id], .slide';

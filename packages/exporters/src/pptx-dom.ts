@@ -1,6 +1,13 @@
-/// <reference lib="dom" />
-/// <reference lib="dom.iterable" />
-
+import type {
+  BrowserConstructor,
+  BrowserDocument,
+  BrowserElement,
+  BrowserHtmlElement,
+  BrowserImageElement,
+  BrowserNode,
+  BrowserStyle as CSSStyleDeclaration,
+  BrowserRect as DOMRect,
+} from './pptx-browser-types';
 import type {
   NativeSlideElement,
   NativeSlideModel,
@@ -9,11 +16,26 @@ import type {
   SlideTextRun,
 } from './pptx-model';
 
+type Element = BrowserElement;
+type HTMLElement = BrowserHtmlElement;
+type HTMLImageElement = BrowserImageElement;
+type Node = BrowserNode;
+declare const document: BrowserDocument;
+declare const Element: BrowserConstructor<Element>;
+declare const HTMLElement: BrowserConstructor<HTMLElement>;
+declare const HTMLImageElement: BrowserConstructor<HTMLImageElement>;
+declare const Node: { TEXT_NODE: number };
+declare const getComputedStyle: (element: Element, pseudo?: string | null) => CSSStyleDeclaration;
+declare const scrollX: number;
+declare const scrollY: number;
+
 /** Serialized into Chromium: keep runtime helpers inside this function. */
 export function extractNativeSlide(
-  root: Element,
+  rootNode: unknown,
   platformFonts: Record<string, string> = {},
 ): NativeSlideModel {
+  // ElementHandle supplies the DOM node; its Node-only type must not require lib.dom.
+  const root = rootNode as Element;
   const rootRect = root.getBoundingClientRect();
   const elements: NativeSlideElement[] = [];
   const warnings = new Set<string>();

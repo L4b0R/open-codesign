@@ -11,6 +11,12 @@ export {
   CommentContentExpectations,
   commentContentFingerprint,
 } from './comment-content';
+export {
+  SaveWebSearchSettingsInput,
+  WEB_SEARCH_SETTINGS_CHANNELS,
+  WebSearchSettingsState,
+  WebSearchTestResult,
+} from './web-search-settings';
 
 export const ProviderId = z.enum([
   'anthropic',
@@ -619,5 +625,15 @@ export {
   replaceEditmodeBlock,
   replaceTweakSchema,
 } from './editmode';
+
+export {
+  formatUsageCost,
+  formatUsageTokens,
+  nextLocalMidnight,
+  summarizeUsageBudget,
+  type UsageBudget,
+  type UsageRecord,
+  type UsageTotals,
+} from './usage-budget';
 
 export * from './web-research';

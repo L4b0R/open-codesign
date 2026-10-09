@@ -294,6 +294,10 @@
       "thinking": "Pensando",
       "streamingLabel": "El asistente está escribiendo",
       "tokensLine": "~{{count}} tokens",
+      "usageLabel": "Uso de este diseño",
+      "usageLoadFailed": "No se pudieron leer los totales de uso",
+      "usageDesign": "Diseño {{tokens}} tokens · {{cost}}",
+      "usageWindow": "Hoy {{todayTokens}} · {{todayCost}} · Semana {{weekTokens}} · {{weekCost}}",
       "artifactDelivered": "entregado",
       "artifactDefaultLabel": "diseño.html",
       "tool": {
@@ -333,6 +337,7 @@
       "keyPlaceholder": "Dejar vacío para mantener {{mask}}",
       "newKeyPlaceholder": "Pegar clave API",
       "model": "Modelo de imagen",
+      "requestBase64": "Solicitar respuesta en base64",
       "baseUrl": "URL base",
       "quality": "Calidad",
       "size": "Tamaño",
@@ -513,6 +518,11 @@
         "reasoningSaveFailed": "Error al guardar la profundidad de razonamiento",
         "connectionOk": "Conexión OK",
         "connectionFailed": "Conexión fallida"
+      },
+      "litellm": {
+        "presetName": "LiteLLM Gateway",
+        "presetDescription": "Gateway autoalojado compatible con OpenAI, clave API opcional",
+        "hint": "Apunta a un proxy LiteLLM que ya tengas en ejecución (LiteLLM no viene incluido). La URL predeterminada es http://localhost:4000/v1; edítala para despliegues remotos. El modo sin clave está activado para proxies sin master key; desactívalo y pega tu master key o virtual key si el gateway requiere autenticación. Para una URL localhost, permite abajo las pruebas en red privada."
       },
       "cliProxyApi": {
         "presetName": "CLIProxyAPI",
